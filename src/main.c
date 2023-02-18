@@ -325,7 +325,7 @@ int main(int argc, char const* const* argv)
 	APPLE64(call_stack_segment_address); // Address of segment in virtual memory
 	APPLE64(call_stack_segment_address); // Address of segment in physical memory (wtf)
 	APPLE64(0); // Segment size in binary
-	uint64_t call_stack_segment_size = 0x4000;
+	uint64_t call_stack_segment_size = 0x8000;
 	APPLE64(call_stack_segment_size); // Segment size in memory
 	APPLE64(0); // Alignment
 	program_header_table_length++;
@@ -397,8 +397,8 @@ int main(int argc, char const* const* argv)
 	#define SUB_IMM32_TO_R64(imm32_, reg64_) \
 		APPBYTES(REX(1,0,0,0), 0x81, MODRM(MOD11, 5, reg64_)); APPLE32(imm32_)
 
-	#define CMOVE_R64_TO_R64(reg32_src_, reg32_dst_) \
-		APPBYTES(REX(1,0,0,0), 0x0f, 0x44, MODRM(MOD11, reg32_dst_, reg32_src_))
+	#define CMOVE_R64_TO_R64(reg64_src_, reg64_dst_) \
+		APPBYTES(REX(1,0,0,0), 0x0f, 0x44, MODRM(MOD11, reg64_dst_, reg64_src_))
 	#define JE_REL8(rel8_) \
 		(APPBYTES(0x74, rel8_) + 1 /* evaluates to rel8's offset */)
 	#define JMP_REL8(rel8_) \
@@ -406,17 +406,28 @@ int main(int argc, char const* const* argv)
 	#define SIGNED_BYTE(v_) \
 		((union{uint8_t u; int8_t s;}){.s = (v_)}.u)
 	
-	#define ADD_R64_TO_R64(reg32_src_, reg32_dst_) \
-		APPBYTES(REX(1,0,0,0), 0x01, MODRM(MOD11, reg32_src_, reg32_dst_))
-	#define SUB_R64_TO_R64(reg32_src_, reg32_dst_) \
-		APPBYTES(REX(1,0,0,0), 0x29, MODRM(MOD11, reg32_src_, reg32_dst_))
+	#define ADD_R64_TO_R64(reg64_src_, reg64_dst_) \
+		APPBYTES(REX(1,0,0,0), 0x01, MODRM(MOD11, reg64_src_, reg64_dst_))
+	#define SUB_R64_TO_R64(reg64_src_, reg64_dst_) \
+		APPBYTES(REX(1,0,0,0), 0x29, MODRM(MOD11, reg64_src_, reg64_dst_))
 
 	#define PUSH_R64_TO_RBPCALLSTACK(reg64_) \
 		MOV_R64_TO_MEMPOINTEDBY_R64(reg64_, RBP); \
-		ADD_IMM32_TO_R64(8, RBP)
+		SUB_IMM32_TO_R64(8, RBP)
 	#define POP_RBPCALLSTACK_TO_R64(reg64_) \
-		SUB_IMM32_TO_R64(8, RBP); \
+		ADD_IMM32_TO_R64(8, RBP); \
 		MOV_MEMPOINTEDBY_R64_TO_R64(RBP, reg64_)
+
+	#define IMUL_R64_TO_R64(reg64_src_, reg64_dst_) \
+		APPBYTES(REX(1,0,0,0), 0x0f, 0xaf, MODRM(MOD11, reg64_dst_, reg64_src_))
+	#define IMUL_R64_WITH_IMM32_TO_R64(reg64_src_a_, imm32_src_b_, reg64_dst_) \
+		APPBYTES(REX(1,0,0,0), 0x69, MODRM(MOD11, reg64_dst_, reg64_src_a_)); APPLE32(imm32_src_b_)
+
+	// turns stuff like 3 into %rbp+3*8
+	// note that the spine call stack grows doenward, and that index 1 here is top
+	#define TURN_RBPCALLSTACK_R64_1INDEX_INTO_ADDR(reg64_) \
+		IMUL_R64_WITH_IMM32_TO_R64(reg64_, 8, reg64_); \
+		ADD_R64_TO_R64(RBP, reg64_)
 
 	// Program code
 	uint64_t code_offset = bin.len;
@@ -444,7 +455,8 @@ int main(int argc, char const* const* argv)
 			{
 				case INSTR_INIT_PROG:
 					// %rbp is used as the spine call stack pointer
-					MOV_IMM32_TO_R64(call_stack_segment_address, RBP);
+					// it grows downward
+					MOV_IMM32_TO_R64(call_stack_segment_address+call_stack_segment_size-8, RBP);
 				break;
 				case INSTR_HALT_PROG:
 					MOV_IMM32_TO_R64(60, RAX); // `exit` syscall number
@@ -504,6 +516,8 @@ int main(int argc, char const* const* argv)
 					PUSH_R64(RBX);
 				break;
 				case INSTR_IF_THEN_ELSE:
+					// if-then-else here pops two things and a condition
+					// and pushes back only one of the things, choosing according to condition
 					POP64_TO_R64(RAX); // else
 					POP64_TO_R64(RBX); // then
 					POP64_TO_R64(RCX); // condition
@@ -520,20 +534,30 @@ int main(int argc, char const* const* argv)
 					PUSH_R64_TO_RBPCALLSTACK(RCX);
 					{
 						uint64_t loop_top = bin.len;
-						POP_RBPCALLSTACK_TO_R64(RCX);
-						PUSH_R64_TO_RBPCALLSTACK(RCX); // pop+push leaves the value in %rcx
-						CALL_R64(RCX);
+						
+						// call condition function (top of spine call stack)
+						MOV_IMM32_TO_R64(1, RAX);
+						TURN_RBPCALLSTACK_R64_1INDEX_INTO_ADDR(RAX);
+						MOV_MEMPOINTEDBY_R64_TO_R64(RAX, RAX);
+						CALL_R64(RAX);
+
+						// pop and break loop if zero
 						POP64_TO_R64(RBX);
 						SUB_IMM32_TO_R64(0, RBX);
 						uint64_t jmpcc_break_rel8_ofs = JE_REL8(0);
 						uint64_t jmpcc_break_ofs_base = bin.len;
-						POP_RBPCALLSTACK_TO_R64(RCX);
-						POP_RBPCALLSTACK_TO_R64(RAX);
-						PUSH_R64_TO_RBPCALLSTACK(RAX); // pop+pop+push+push to get deeper
-						PUSH_R64_TO_RBPCALLSTACK(RCX);
+
+						// call body function
+						MOV_IMM32_TO_R64(2, RAX);
+						TURN_RBPCALLSTACK_R64_1INDEX_INTO_ADDR(RAX);
+						MOV_MEMPOINTEDBY_R64_TO_R64(RAX, RAX);
 						CALL_R64(RAX);
+
+						// loop back
 						uint64_t jmp_loop_rel8_ofs = JMP_REL8(0);
 						uint64_t loop_bottom = bin.len;
+
+						// resolve relative jump distances
 						OVWBYTES(jmpcc_break_rel8_ofs, loop_bottom - jmpcc_break_ofs_base);
 						OVWBYTES(jmp_loop_rel8_ofs,
 							SIGNED_BYTE((signed)loop_top - (signed)loop_bottom));
