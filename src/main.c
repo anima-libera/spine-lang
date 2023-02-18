@@ -76,17 +76,23 @@ struct instr_t
 	enum instr_type_t
 	{
 		INSTR_INIT_PROG,
-		INSTR_HALT_PROG,
+		INSTR_HALT_PROG, // TODO test
 		INSTR_PUSH_FUNC,
-		INSTR_CALL_POP,
+		INSTR_CALL,
 		INSTR_INIT_FUNC,
-		INSTR_RETURN_FUNC,
+		INSTR_RETURN_FUNC, // TODO test
 		INSTR_PUSH_IMM,
 		INSTR_PRINT_CHAR,
 		INSTR_DUP,
 		INSTR_DISCARD,
+		INSTR_SWAP, // a b -- b a
+		INSTR_PEEK, // ... i[n+1] h[n] g[n-1] ... b[1] a[0] n -- ... b a h(copied)
+		INSTR_OVW, // ... g[n] ... a[0] h n -- ... h(g is overwritten) ... a
 		INSTR_ADD,
 		INSTR_SUB,
+		INSTR_MUL,
+		INSTR_DIV,
+		INSTR_MOD,
 		INSTR_IF_THEN_ELSE,
 		INSTR_WHILE,
 	}
@@ -147,7 +153,7 @@ uint64_t parse_func(da_func_t* da, uint64_t self_index, char const* src, bool is
 	uint64_t i = 0;
 	while ((src[i] != '\0' && is_entry_point) || (src[i] != ']' && !is_entry_point))
 	{
-		if (src[i] == ' ' || src[i] == '\n')
+		if (src[i] == ' ' || src[i] == '\t' || src[i] == '\n')
 		{
 			i++;
 		}
@@ -168,7 +174,7 @@ uint64_t parse_func(da_func_t* da, uint64_t self_index, char const* src, bool is
 		{
 			i++;
 			da_instr_append(&func->code,
-				(instr_t){.type = INSTR_CALL_POP});
+				(instr_t){.type = INSTR_CALL});
 		}
 		else if ('0' <= src[i] && src[i] <= '9')
 		{
@@ -189,8 +195,14 @@ uint64_t parse_func(da_func_t* da, uint64_t self_index, char const* src, bool is
 		else if SIMPLE_INSTR('r', INSTR_RETURN_FUNC)
 		else if SIMPLE_INSTR('d', INSTR_DUP)
 		else if SIMPLE_INSTR('g', INSTR_DISCARD)
+		else if SIMPLE_INSTR('s', INSTR_SWAP)
+		else if SIMPLE_INSTR('n', INSTR_PEEK)
+		else if SIMPLE_INSTR('o', INSTR_OVW)
 		else if SIMPLE_INSTR('+', INSTR_ADD)
 		else if SIMPLE_INSTR('-', INSTR_SUB)
+		else if SIMPLE_INSTR('*', INSTR_MUL)
+		else if SIMPLE_INSTR('/', INSTR_DIV)
+		else if SIMPLE_INSTR('%', INSTR_MOD)
 		else if SIMPLE_INSTR('i', INSTR_IF_THEN_ELSE) // `<cond> <then> <else> i`
 		else if SIMPLE_INSTR('w', INSTR_WHILE) // `[<cond>] [...] w` is `while(cond){...}`
 		#undef SIMPLE_INSTR
@@ -467,6 +479,9 @@ int main(int argc, char const* const* argv)
 		IMUL_R64_WITH_IMM32_TO_R64(reg64_, 8, reg64_); \
 		ADD_R64_TO_R64(RBP, reg64_)
 
+	#define IDIV_RDXRAX_BY_R64_TO_RAX_DIV_RDX_MOD(reg64_) \
+		APPBYTES(REX(1,0,0,0), 0xf7, MODRM(MOD11, 7, reg64_))
+
 	// Program code
 	uint64_t code_offset = bin.len;
 	OVWLE64(entry_point_address_ofs, code_segment_address + code_offset);
@@ -505,7 +520,7 @@ int main(int argc, char const* const* argv)
 					MOV_FUNCADDR32_TO_R64(instr.value, RAX);
 					PUSH_R64(RAX);
 				break;
-				case INSTR_CALL_POP:
+				case INSTR_CALL:
 					POP64_TO_R64(RAX);
 					CALL_R64(RAX);
 				break;
@@ -541,6 +556,26 @@ int main(int argc, char const* const* argv)
 				case INSTR_DISCARD:
 					POP64_TO_R64(RAX);
 				break;
+				case INSTR_SWAP:
+					POP64_TO_R64(RAX);
+					POP64_TO_R64(RBX);
+					PUSH_R64(RAX);
+					PUSH_R64(RBX);
+				break;
+				case INSTR_PEEK:
+					POP64_TO_R64(RAX);
+					IMUL_R64_WITH_IMM32_TO_R64(RAX, 8, RAX);
+					ADD_R64_TO_R64(RSP, RAX);
+					MOV_MEMPOINTEDBY_R64_TO_R64(RAX, RAX);
+					PUSH_R64(RAX);
+				break;
+				case INSTR_OVW:
+					POP64_TO_R64(RAX); // index
+					POP64_TO_R64(RBX); // value
+					IMUL_R64_WITH_IMM32_TO_R64(RAX, 8, RAX);
+					ADD_R64_TO_R64(RSP, RAX);
+					MOV_R64_TO_MEMPOINTEDBY_R64(RBX, RAX);
+				break;
 				case INSTR_ADD:
 					POP64_TO_R64(RAX);
 					POP64_TO_R64(RBX);
@@ -552,6 +587,26 @@ int main(int argc, char const* const* argv)
 					POP64_TO_R64(RBX);
 					SUB_R64_TO_R64(RAX, RBX);
 					PUSH_R64(RBX);
+				break;
+				case INSTR_MUL:
+					POP64_TO_R64(RAX);
+					POP64_TO_R64(RBX);
+					IMUL_R64_TO_R64(RAX, RBX);
+					PUSH_R64(RBX);
+				break;
+				case INSTR_DIV:
+					POP64_TO_R64(RBX); // divisor
+					POP64_TO_R64(RAX); // numerator
+					MOV_IMM32_TO_R64(0, RDX); // high part of the 128-bits numerator
+					IDIV_RDXRAX_BY_R64_TO_RAX_DIV_RDX_MOD(RBX);
+					PUSH_R64(RAX); // quotient
+				break;
+				case INSTR_MOD:
+					POP64_TO_R64(RBX); // divisor
+					POP64_TO_R64(RAX); // numerator
+					MOV_IMM32_TO_R64(0, RDX); // high part of the 128-bits numerator
+					IDIV_RDXRAX_BY_R64_TO_RAX_DIV_RDX_MOD(RBX);
+					PUSH_R64(RDX); // remainder
 				break;
 				case INSTR_IF_THEN_ELSE:
 					// if-then-else here pops two things and a condition
@@ -633,7 +688,7 @@ int main(int argc, char const* const* argv)
 	// End of code
 	COMPLETE_CODE_SEGMENT_INFO(code_offset, bin.len - code_offset);
 
-	#if 1
+	#if 0
 		printf("base address: 0x%lx\n", code_offset);
 		for (uint64_t i = code_offset; i < bin.len; i++)
 		{

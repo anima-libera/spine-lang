@@ -21,14 +21,16 @@ syntax | behavior
 ------ | --------
 *base 10 unsigned integers* | push constant to data stack
 `p` | pop ascii code from data stack and print
-`+` and `-` | pop a, pop b, push (a op b)
-`d` and `g` | duplicate and discard
+`+`, `-`, `*`, `/`, `%` | pop b, pop a, push (a op b)
+`d`, `s` and `g` | duplicate, swap 2 and discard
 `[...]` where `...` is some code | push address of anonymous function that does `...`
 `i` | pop b, pop a, pop c, if c != 0 then push a else push b
 `c` | pop function address and call it
 `w` | pop function address b, pop function address c, while(call c, pop != 0){call b}
 `r` | return from the current function
 `h` | halt execution
+`n` | pop index and push copy of stack's index cell
+`o` | pop value, pop index and overwrite stack's index cell with value
 
 Spaces are ignored.
 

@@ -13,22 +13,20 @@ contexts:
       scope: keyword.control.conditional.if.spine
     - match: 'p'
       scope: support.function.spine
-    - match: 'd|g|r|h'
+    - match: 'd|g|r|h|s|n|o'
       scope: punctuation.spine
     - match: 'c'
       scope: keyword.other.spine
-    - match: '\+|\-'
+    - match: '\+|\-|\*|\/|\%'
       scope: keyword.operator.arithmetic.spine
     - match: '[0-9]+'
       scope: constant.numeric.value.spine
-    - match: '\"[^\"]*\"'
-      scope: string.quoted.double.spine
-    - match: '#.*'
-      scope: comment.line.spine
     - match: '\['
       scope: punctuation.section.brackets.begin.spine
       push: brackets
     - match: '\]'
+      scope: invalid.illegal.spine
+    - match: '[^ \t\n]'
       scope: invalid.illegal.spine
 
   brackets:
