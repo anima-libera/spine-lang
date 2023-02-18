@@ -83,6 +83,12 @@ struct instr_t
 		INSTR_RETURN_FUNC,
 		INSTR_PUSH_IMM,
 		INSTR_PRINT_CHAR,
+		INSTR_DUP,
+		INSTR_DISCARD,
+		INSTR_ADD,
+		INSTR_SUB,
+		INSTR_IF_THEN_ELSE,
+		INSTR_WHILE,
 	}
 	type;
 	uint64_t value;
@@ -174,24 +180,19 @@ uint64_t parse_func(da_func_t* da, uint64_t self_index, char const* src, bool is
 			da_instr_append(&func->code,
 				(instr_t){.type = INSTR_PUSH_IMM, .value = value});
 		}
-		else if (src[i] == 'p')
-		{
-			i++;
-			da_instr_append(&func->code,
-				(instr_t){.type = INSTR_PRINT_CHAR});
-		}
-		else if (src[i] == 'h')
-		{
-			i++;
-			da_instr_append(&func->code,
-				(instr_t){.type = INSTR_HALT_PROG});
-		}
-		else if (src[i] == 'r')
-		{
-			i++;
-			da_instr_append(&func->code,
-				(instr_t){.type = INSTR_RETURN_FUNC});
-		}
+		#define SIMPLE_INSTR(char_, instr_type_) \
+			(src[i]==(char_)){i++;da_instr_append(&func->code, \
+				(instr_t){.type=(instr_type_)});}
+		else if SIMPLE_INSTR('p', INSTR_PRINT_CHAR)
+		else if SIMPLE_INSTR('h', INSTR_HALT_PROG)
+		else if SIMPLE_INSTR('r', INSTR_RETURN_FUNC)
+		else if SIMPLE_INSTR('d', INSTR_DUP)
+		else if SIMPLE_INSTR('g', INSTR_DISCARD)
+		else if SIMPLE_INSTR('+', INSTR_ADD)
+		else if SIMPLE_INSTR('-', INSTR_SUB)
+		else if SIMPLE_INSTR('i', INSTR_IF_THEN_ELSE) // `<cond> <then> <else> i`
+		else if SIMPLE_INSTR('w', INSTR_WHILE) // `[<cond>] [...] w` is `while(cond){...}`
+		#undef SIMPLE_INSTR
 		else
 		{
 			assert(false);
@@ -396,6 +397,27 @@ int main(int argc, char const* const* argv)
 	#define SUB_IMM32_TO_R64(imm32_, reg64_) \
 		APPBYTES(REX(1,0,0,0), 0x81, MODRM(MOD11, 5, reg64_)); APPLE32(imm32_)
 
+	#define CMOVE_R64_TO_R64(reg32_src_, reg32_dst_) \
+		APPBYTES(REX(1,0,0,0), 0x0f, 0x44, MODRM(MOD11, reg32_dst_, reg32_src_))
+	#define JE_REL8(rel8_) \
+		(APPBYTES(0x74, rel8_) + 1 /* evaluates to rel8's offset */)
+	#define JMP_REL8(rel8_) \
+		(APPBYTES(0xeb, rel8_) + 1 /* evaluates to rel8's offset */)
+	#define SIGNED_BYTE(v_) \
+		((union{uint8_t u; int8_t s;}){.s = (v_)}.u)
+	
+	#define ADD_R64_TO_R64(reg32_src_, reg32_dst_) \
+		APPBYTES(REX(1,0,0,0), 0x01, MODRM(MOD11, reg32_src_, reg32_dst_))
+	#define SUB_R64_TO_R64(reg32_src_, reg32_dst_) \
+		APPBYTES(REX(1,0,0,0), 0x29, MODRM(MOD11, reg32_src_, reg32_dst_))
+
+	#define PUSH_R64_TO_RBPCALLSTACK(reg64_) \
+		MOV_R64_TO_MEMPOINTEDBY_R64(reg64_, RBP); \
+		ADD_IMM32_TO_R64(8, RBP)
+	#define POP_RBPCALLSTACK_TO_R64(reg64_) \
+		SUB_IMM32_TO_R64(8, RBP); \
+		MOV_MEMPOINTEDBY_R64_TO_R64(RBP, reg64_)
+
 	// Program code
 	uint64_t code_offset = bin.len;
 	OVWLE64(entry_point_address_ofs, code_segment_address + code_offset);
@@ -441,14 +463,12 @@ int main(int argc, char const* const* argv)
 					// The `call` to here pushed the return address on the data stack
 					// so we move it to the spine call stack
 					POP64_TO_R64(RAX);
-					MOV_R64_TO_MEMPOINTEDBY_R64(RAX, RBP);
-					ADD_IMM32_TO_R64(8, RBP);
+					PUSH_R64_TO_RBPCALLSTACK(RAX);
 				break;
 				case INSTR_RETURN_FUNC:
 					// The return address was put on the spine call stack
 					// so we move it back to the data stack for `ret` to work
-					SUB_IMM32_TO_R64(8, RBP);
-					MOV_MEMPOINTEDBY_R64_TO_R64(RBP, RAX);
+					POP_RBPCALLSTACK_TO_R64(RAX);
 					PUSH_R64(RAX);
 					RET();
 				break;
@@ -461,7 +481,65 @@ int main(int argc, char const* const* argv)
 					MOV_R64_TO_R64(RSP, RSI); // ptr to string is stack ptr
 					MOV_IMM32_TO_R64(1, RDX); // print 1 char
 					SYSCALL();
-					POP64_TO_R64(RAX); // pop to discard
+					POP64_TO_R64(RAX); // discard the char
+				break;
+				case INSTR_DUP:
+					POP64_TO_R64(RAX);
+					PUSH_R64(RAX);
+					PUSH_R64(RAX);
+				break;
+				case INSTR_DISCARD:
+					POP64_TO_R64(RAX);
+				break;
+				case INSTR_ADD:
+					POP64_TO_R64(RAX);
+					POP64_TO_R64(RBX);
+					ADD_R64_TO_R64(RAX, RBX);
+					PUSH_R64(RBX);
+				break;
+				case INSTR_SUB:
+					POP64_TO_R64(RAX);
+					POP64_TO_R64(RBX);
+					SUB_R64_TO_R64(RAX, RBX);
+					PUSH_R64(RBX);
+				break;
+				case INSTR_IF_THEN_ELSE:
+					POP64_TO_R64(RAX); // else
+					POP64_TO_R64(RBX); // then
+					POP64_TO_R64(RCX); // condition
+					SUB_IMM32_TO_R64(0, RCX); // compare condition with 0 (set cc flags)
+					CMOVE_R64_TO_R64(RAX, RBX); // result = condition == 0 ? else : then
+					PUSH_R64(RBX);
+				break;
+				case INSTR_WHILE:
+					POP64_TO_R64(RAX); // body function
+					POP64_TO_R64(RCX); // condition function
+					// save the body and condition functions to the callsatck because
+					// calling them can trash %rax and %rcx
+					PUSH_R64_TO_RBPCALLSTACK(RAX);
+					PUSH_R64_TO_RBPCALLSTACK(RCX);
+					{
+						uint64_t loop_top = bin.len;
+						POP_RBPCALLSTACK_TO_R64(RCX);
+						PUSH_R64_TO_RBPCALLSTACK(RCX); // pop+push leaves the value in %rcx
+						CALL_R64(RCX);
+						POP64_TO_R64(RBX);
+						SUB_IMM32_TO_R64(0, RBX);
+						uint64_t jmpcc_break_rel8_ofs = JE_REL8(0);
+						uint64_t jmpcc_break_ofs_base = bin.len;
+						POP_RBPCALLSTACK_TO_R64(RCX);
+						POP_RBPCALLSTACK_TO_R64(RAX);
+						PUSH_R64_TO_RBPCALLSTACK(RAX); // pop+pop+push+push to get deeper
+						PUSH_R64_TO_RBPCALLSTACK(RCX);
+						CALL_R64(RAX);
+						uint64_t jmp_loop_rel8_ofs = JMP_REL8(0);
+						uint64_t loop_bottom = bin.len;
+						OVWBYTES(jmpcc_break_rel8_ofs, loop_bottom - jmpcc_break_ofs_base);
+						OVWBYTES(jmp_loop_rel8_ofs,
+							SIGNED_BYTE((signed)loop_top - (signed)loop_bottom));
+					}
+					POP_RBPCALLSTACK_TO_R64(RAX); // discard
+					POP_RBPCALLSTACK_TO_R64(RAX); // discard
 				break;
 				default:
 					assert(false);
