@@ -1,4 +1,10 @@
 
+# Compile the Spine compiler,
+# then invoke it to compile some Spine code,
+# then invoke the compiled Spine program.
+
+# 2 aguments are fowarded to the spine compiler
+
 mkdir -p bin
 
 # Compile Spine compiler
@@ -10,7 +16,7 @@ then
 	echo "Error: Expected a Spine program as first argument."
 	echo "Try \"104p10p\" for example (it should print h or something)."
 fi
-./bin/spine "$1"
+./bin/spine "$1" "$2"
 
 # Run the binary produced by the Spine compiler
 chmod +x bin/jaaj

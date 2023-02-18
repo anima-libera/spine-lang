@@ -16,7 +16,7 @@ typedef struct buf_t buf_t;
 uint64_t buf_append_zeros(buf_t* buf, uint64_t size)
 {
 	uint64_t new_len = buf->len + size;
-	#define RESIZE_DA(da_cap_, da_arr_, new_len_) \
+	#define RESIZE_DA(da_cap_, da_arr_, new_len_, size_of_elem_) \
 		if (da_cap_ < (new_len_)) \
 		{ \
 			if (da_cap_ == 0) \
@@ -27,9 +27,9 @@ uint64_t buf_append_zeros(buf_t* buf, uint64_t size)
 			{ \
 				da_cap_ *= 2; \
 			} \
-			da_arr_ = realloc(da_arr_, da_cap_); \
+			da_arr_ = realloc(da_arr_, (da_cap_) * (size_of_elem_)); \
 		}
-	RESIZE_DA(buf->cap, buf->arr, new_len);
+	RESIZE_DA(buf->cap, buf->arr, new_len, sizeof (uint8_t));
 	memset(&buf->arr[buf->len], 0, size);
 	uint64_t old_len = buf->len;
 	buf->len += size;
@@ -66,7 +66,7 @@ typedef struct da_addr_ofs_t da_addr_ofs_t;
 
 void da_addr_ofs_append(da_addr_ofs_t* da, addr_ofs_t data_addr_ofs)
 {
-	RESIZE_DA(da->cap, da->arr, da->len + 1);
+	RESIZE_DA(da->cap, da->arr, da->len + 1, sizeof (addr_ofs_t));
 	da->arr[da->len] = data_addr_ofs;
 	da->len++;
 }
@@ -104,7 +104,7 @@ typedef struct da_instr_t da_instr_t;
 
 void da_instr_append(da_instr_t* da, instr_t instr)
 {
-	RESIZE_DA(da->cap, da->arr, da->len + 1);
+	RESIZE_DA(da->cap, da->arr, da->len + 1, sizeof (instr_t));
 	da->arr[da->len] = instr;
 	da->len++;
 }
@@ -124,7 +124,7 @@ typedef struct da_func_t da_func_t;
 
 void da_func_append(da_func_t* da, func_t func)
 {
-	RESIZE_DA(da->cap, da->arr, da->len + 1);
+	RESIZE_DA(da->cap, da->arr, da->len + 1, sizeof (func_t));
 	da->arr[da->len] = func;
 	da->len++;
 }
@@ -147,7 +147,7 @@ uint64_t parse_func(da_func_t* da, uint64_t self_index, char const* src, bool is
 	uint64_t i = 0;
 	while ((src[i] != '\0' && is_entry_point) || (src[i] != ']' && !is_entry_point))
 	{
-		if (src[i] == ' ')
+		if (src[i] == ' ' || src[i] == '\n')
 		{
 			i++;
 		}
@@ -158,6 +158,7 @@ uint64_t parse_func(da_func_t* da, uint64_t self_index, char const* src, bool is
 			i++;
 			uint64_t sub_func_index = da->len;
 			i += parse_func(da, sub_func_index, &src[i], false);
+			func = &da->arr[self_index]; // reallocation of the da might invalidate this ptr
 			assert(src[i] == ']');
 			i++;
 			da_instr_append(&func->code,
@@ -211,10 +212,47 @@ uint64_t parse_func(da_func_t* da, uint64_t self_index, char const* src, bool is
 	return i;
 }
 
+char* read_file(char const* filepath)
+{
+	FILE* file = fopen(filepath, "r");
+	if (file == NULL)
+	{
+		fprintf(stderr, "File error: failed to open \"%s\"\n", filepath);
+		return NULL;
+	}
+	fseek(file, 0, SEEK_END);
+	long const length = ftell(file);
+	fseek(file, 0, SEEK_SET);
+	char* buffer = malloc((length+1) * sizeof(char));
+	size_t const length_read = fread(buffer, sizeof(char), length, file);
+	fclose(file);
+	if (length_read != (unsigned int)length)
+	{
+		fprintf(stderr, "File error: failed to properly read \"%s\"\n",
+			filepath);
+		free(buffer);
+		return NULL;
+	}
+	buffer[length] = '\0';
+	return buffer;
+}
+
 int main(int argc, char const* const* argv)
 {
-	assert(argc == 2);
-	char const* src = argv[1];
+	assert(argc == 3);
+	char const* src;
+	if (strcmp(argv[1], "-c") == 0)
+	{
+		src = argv[2];
+	}
+	else if (strcmp(argv[1], "-f") == 0)
+	{
+		src = read_file(argv[2]);
+	}
+	else
+	{
+		assert(false);
+	}
 
 	// Parsing
 	da_func_t func_da = {0};
@@ -595,8 +633,8 @@ int main(int argc, char const* const* argv)
 	// End of code
 	COMPLETE_CODE_SEGMENT_INFO(code_offset, bin.len - code_offset);
 
-	#if 0
-		printf("base address: 0x%x\n", code_offset);
+	#if 1
+		printf("base address: 0x%lx\n", code_offset);
 		for (uint64_t i = code_offset; i < bin.len; i++)
 		{
 			printf("%02x ", bin.arr[i]);

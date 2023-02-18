@@ -1,0 +1,38 @@
+%YAML 1.2
+---
+name: Spine
+file_extensions: [spn, spine, Spn, Spine, SPN, SPINE]
+scope: source.spine
+
+contexts:
+
+  main:
+    - match: 'w'
+      scope: keyword.control.loop.while.spine
+    - match: 'i'
+      scope: keyword.control.conditional.if.spine
+    - match: 'p'
+      scope: support.function.spine
+    - match: 'd|g|r|h'
+      scope: punctuation.spine
+    - match: 'c'
+      scope: keyword.other.spine
+    - match: '\+|\-'
+      scope: keyword.operator.arithmetic.spine
+    - match: '[0-9]+'
+      scope: constant.numeric.value.spine
+    - match: '\"[^\"]*\"'
+      scope: string.quoted.double.spine
+    - match: '#.*'
+      scope: comment.line.spine
+    - match: '\['
+      scope: punctuation.section.brackets.begin.spine
+      push: brackets
+    - match: '\]'
+      scope: invalid.illegal.spine
+
+  brackets:
+    - match: '\]'
+      scope: punctuation.section.brackets.end.spine
+      pop: true
+    - include: main
