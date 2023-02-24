@@ -19,7 +19,8 @@ Currently accepted instructions are:
 
 syntax | behavior
 ------ | --------
-*base 10 unsigned integers* | push constant to data stack
+*base 10 unsigned integer* | push constant
+`'` *followed by a character* | push character ascoo value
 `p` | pop ascii code from data stack and print
 `+`, `-`, `*`, `/`, `%` | pop b, pop a, push (a op b)
 `d`, `s` and `g` | duplicate, swap 2 and discard
@@ -32,7 +33,7 @@ syntax | behavior
 `n` | pop index and push copy of stack's index cell
 `o` | pop value, pop index and overwrite stack's index cell with value
 
-Spaces are ignored.
+Some whitespace is ignored.
 
 *Example:* `31 [d127-][dp 1+]w 10p` prints all the ascii characters from space (code 31) to `~` (code 126).
 
@@ -41,3 +42,4 @@ This is not practical or even golfed at all for now, but this is still very youn
 ## Notes
 
 - There is rudimentary Sublime Text syntax support, see the `Spine.sublime-syntax` file (put it in some Sublime Text folder somewhere to use (or put a symlink instead to keep it automatically updated when git pulling (but note that the simlink trick seem to require closing+reopening Sublime Text to apply any change to the syntax file))).
+- There is two stacks: the data stack and the call stack. The data stack is the one used by the instructions ot push and pop data to and from. The call stack is used by function calling and returning, as well as some other instructions (like the `w` loop).

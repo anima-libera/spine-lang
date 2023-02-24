@@ -170,12 +170,6 @@ uint64_t parse_func(da_func_t* da, uint64_t self_index, char const* src, bool is
 			da_instr_append(&func->code,
 				(instr_t){.type = INSTR_PUSH_FUNC, .value = sub_func_index});
 		}
-		else if (src[i] == 'c')
-		{
-			i++;
-			da_instr_append(&func->code,
-				(instr_t){.type = INSTR_CALL});
-		}
 		else if ('0' <= src[i] && src[i] <= '9')
 		{
 			uint64_t value = 0;
@@ -187,10 +181,19 @@ uint64_t parse_func(da_func_t* da, uint64_t self_index, char const* src, bool is
 			da_instr_append(&func->code,
 				(instr_t){.type = INSTR_PUSH_IMM, .value = value});
 		}
+		else if (src[i] == '\'')
+		{
+			i++;
+			uint64_t value = src[i];
+			i++;
+			da_instr_append(&func->code,
+				(instr_t){.type = INSTR_PUSH_IMM, .value = value});
+		}
 		#define SIMPLE_INSTR(char_, instr_type_) \
 			(src[i]==(char_)){i++;da_instr_append(&func->code, \
 				(instr_t){.type=(instr_type_)});}
 		else if SIMPLE_INSTR('p', INSTR_PRINT_CHAR)
+		else if SIMPLE_INSTR('c', INSTR_CALL)
 		else if SIMPLE_INSTR('h', INSTR_HALT_PROG)
 		else if SIMPLE_INSTR('r', INSTR_RETURN_FUNC)
 		else if SIMPLE_INSTR('d', INSTR_DUP)
