@@ -36,6 +36,13 @@ uint64_t buf_append_zeros(buf_t* buf, uint64_t size)
 	return old_len;
 }
 
+void buf_append_byte(buf_t* buf, uint8_t byte)
+{
+	RESIZE_DA(buf->cap, buf->arr, buf->len + 1, sizeof (uint8_t));
+	buf->arr[buf->len] = byte;
+	buf->len++;
+}
+
 uint64_t buf_append(buf_t* buf, uint8_t const* new_stuff, uint64_t size)
 {
 	uint64_t old_len = buf_append_zeros(buf, size);
@@ -82,6 +89,7 @@ struct instr_t
 		INSTR_INIT_FUNC,
 		INSTR_RETURN_FUNC, // TODO test
 		INSTR_PUSH_IMM,
+		INSTR_PUSH_DATA_ADDR_AND_SIZE,
 		INSTR_PRINT_CHAR,
 		INSTR_DUP,
 		INSTR_DISCARD,
@@ -95,6 +103,8 @@ struct instr_t
 		INSTR_MOD,
 		INSTR_IF_THEN_ELSE,
 		INSTR_WHILE,
+		INSTR_READ, // ptr -- (*ptr)
+		INSTR_WRITE, // ... val ptr -- ... ((*ptr) is overwritten with val)
 	}
 	type;
 	uint64_t value;
@@ -135,7 +145,22 @@ void da_func_append(da_func_t* da, func_t func)
 	da->len++;
 }
 
-uint64_t parse_func(da_func_t* da, uint64_t self_index, char const* src, bool is_entry_point)
+struct da_buf_t
+{
+	uint64_t len, cap;
+	buf_t* arr;
+};
+typedef struct da_buf_t da_buf_t;
+
+void da_buf_append(da_buf_t* da, buf_t value)
+{
+	RESIZE_DA(da->cap, da->arr, da->len + 1, sizeof (buf_t));
+	da->arr[da->len] = value;
+	da->len++;
+}
+
+uint64_t parse_func(da_func_t* da, da_buf_t* da_buf,
+	uint64_t self_index, char const* src, bool is_entry_point)
 {
 	assert(da->len == self_index);
 	da_func_append(da, (func_t){0});
@@ -163,7 +188,7 @@ uint64_t parse_func(da_func_t* da, uint64_t self_index, char const* src, bool is
 			// one can use `c` to call it
 			i++;
 			uint64_t sub_func_index = da->len;
-			i += parse_func(da, sub_func_index, &src[i], false);
+			i += parse_func(da, da_buf, sub_func_index, &src[i], false);
 			func = &da->arr[self_index]; // reallocation of the da might invalidate this ptr
 			assert(src[i] == ']');
 			i++;
@@ -184,10 +209,26 @@ uint64_t parse_func(da_func_t* da, uint64_t self_index, char const* src, bool is
 		else if (src[i] == '\'')
 		{
 			i++;
-			uint64_t value = src[i];
+			uint64_t char_ascii_code = src[i];
 			i++;
 			da_instr_append(&func->code,
-				(instr_t){.type = INSTR_PUSH_IMM, .value = value});
+				(instr_t){.type = INSTR_PUSH_IMM, .value = char_ascii_code});
+		}
+		else if (src[i] == '\"')
+		{
+			i++;
+			buf_t buf = {0};
+			while (src[i] != '\"')
+			{
+				uint64_t char_ascii_code = src[i];
+				buf_append_byte(&buf, char_ascii_code);
+				i++;
+			}
+			i++; // terminating double-quote
+			da_buf_append(da_buf, buf);
+			uint64_t buf_index = da_buf->len-1;
+			da_instr_append(&func->code,
+				(instr_t){.type = INSTR_PUSH_DATA_ADDR_AND_SIZE, .value = buf_index});
 		}
 		#define SIMPLE_INSTR(char_, instr_type_) \
 			(src[i]==(char_)){i++;da_instr_append(&func->code, \
@@ -208,6 +249,8 @@ uint64_t parse_func(da_func_t* da, uint64_t self_index, char const* src, bool is
 		else if SIMPLE_INSTR('%', INSTR_MOD)
 		else if SIMPLE_INSTR('i', INSTR_IF_THEN_ELSE) // `<cond> <then> <else> i`
 		else if SIMPLE_INSTR('w', INSTR_WHILE) // `[<cond>] [...] w` is `while(cond){...}`
+		else if SIMPLE_INSTR('?', INSTR_READ)
+		else if SIMPLE_INSTR('!', INSTR_WRITE)
 		#undef SIMPLE_INSTR
 		else
 		{
@@ -271,7 +314,8 @@ int main(int argc, char const* const* argv)
 
 	// Parsing
 	da_func_t func_da = {0};
-	parse_func(&func_da, 0, src, true);
+	da_buf_t da_buf = {0};
+	parse_func(&func_da, &da_buf, 0, src, true);
 
 	// Buffer
 	buf_t bin = {0};
@@ -543,6 +587,17 @@ int main(int argc, char const* const* argv)
 				case INSTR_PUSH_IMM:
 					PUSH_IMM32(instr.value);
 				break;
+				case INSTR_PUSH_DATA_ADDR_AND_SIZE:
+					{
+						buf_t* buf = &da_buf.arr[instr.value];
+						uint64_t addr = data_segment_address +
+							buf_append(&data, buf->arr, buf->len);
+						MOV_DATAADDR32_TO_R64(addr, RAX);
+						MOV_IMM32_TO_R64(buf->len, RBX);
+						PUSH_R64(RAX);
+						PUSH_R64(RBX);
+					}
+				break;
 				case INSTR_PRINT_CHAR:
 					MOV_IMM32_TO_R64(1, RAX); // `write` syscall number
 					MOV_IMM32_TO_R64(1, RDI); // `stdout` file descriptor
@@ -660,6 +715,16 @@ int main(int argc, char const* const* argv)
 					}
 					POP_RBPCALLSTACK_TO_R64(RAX); // discard
 					POP_RBPCALLSTACK_TO_R64(RAX); // discard
+				break;
+				case INSTR_READ:
+					POP64_TO_R64(RAX);
+					MOV_MEMPOINTEDBY_R64_TO_R64(RAX, RAX);
+					PUSH_R64(RAX);
+				break;
+				case INSTR_WRITE:
+					POP64_TO_R64(RAX);
+					POP64_TO_R64(RBX);
+					MOV_R64_TO_MEMPOINTEDBY_R64(RBX, RAX);
 				break;
 				default:
 					assert(false);

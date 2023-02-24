@@ -8,7 +8,7 @@
 mkdir -p bin
 
 # Compile Spine compiler
-gcc src/main.c -o bin/spine
+gcc src/main.c -o bin/spine -Os
 
 # Use Spine compiler to create a binary
 if [ $# -eq 0 ]

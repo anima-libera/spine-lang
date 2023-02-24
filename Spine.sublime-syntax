@@ -15,7 +15,7 @@ contexts:
       scope: support.function.spine
     - match: 'd|g|r|h|s|n|o'
       scope: punctuation.spine
-    - match: 'c'
+    - match: 'c|\?|\!'
       scope: keyword.other.spine
     - match: '\+|\-|\*|\/|\%'
       scope: keyword.operator.arithmetic.spine
@@ -23,6 +23,8 @@ contexts:
       scope: constant.numeric.value.spine
     - match: '''.'
       scope: string.quoted.single.spine
+    - match: '\"[^\"]*\"'
+      scope: string.quoted.double.spine
     - match: '\['
       scope: punctuation.section.brackets.begin.spine
       push: brackets
