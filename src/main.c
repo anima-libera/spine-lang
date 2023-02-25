@@ -136,6 +136,7 @@ void da_instr_append(da_instr_t* da, instr_t instr)
 struct func_t
 {
 	da_instr_t code;
+	char name;
 };
 typedef struct func_t func_t;
 
@@ -168,7 +169,7 @@ void da_buf_append(da_buf_t* da, buf_t value)
 }
 
 uint64_t parse_func(da_func_t* func_da, da_buf_t* buf_da,
-	uint64_t self_index, char const* src, bool is_entry_point)
+	uint64_t self_index, char const* src, bool is_entry_point, char name)
 {
 	uint64_t rw_size = 64; // size for `?` and `!` instr
 	assert(func_da->len == self_index);
@@ -184,6 +185,7 @@ uint64_t parse_func(da_func_t* func_da, da_buf_t* buf_da,
 		da_instr_append(&func->code,
 			(instr_t){.type = INSTR_INIT_FUNC});
 	}
+	func->name = name;
 	uint64_t i = 0;
 	while ((src[i] != '\0' && is_entry_point) || (src[i] != ']' && !is_entry_point))
 	{
@@ -197,12 +199,45 @@ uint64_t parse_func(da_func_t* func_da, da_buf_t* buf_da,
 			// one can use `c` to call it
 			i++;
 			uint64_t sub_func_index = func_da->len;
-			i += parse_func(func_da, buf_da, sub_func_index, &src[i], false);
+			i += parse_func(func_da, buf_da, sub_func_index, &src[i], false, '\0');
 			func = &func_da->arr[self_index]; // realloc of the da might invalidate this ptr
 			assert(src[i] == ']');
 			i++;
 			da_instr_append(&func->code,
 				(instr_t){.type = INSTR_PUSH_FUNC, .value = sub_func_index});
+		}
+		else if (src[i] == '@')
+		{
+			// define named function
+			i++;
+			char name = src[i];
+			assert('A' <= name && name <= 'Z');
+			i++;
+			assert(src[i] == '[');
+			i++;
+			uint64_t sub_func_index = func_da->len;
+			i += parse_func(func_da, buf_da, sub_func_index, &src[i], false, name);
+			func = &func_da->arr[self_index]; // realloc of the da might invalidate this ptr
+			assert(src[i] == ']');
+			i++;
+		}
+		else if ('A' <= src[i] && src[i] <= 'Z')
+		{
+			// push named function address
+			char name = src[i];
+			i++;
+			uint64_t func_index = UINT64_MAX;
+			for (int64_t i = func_da->len-1; i >= 0; i--)
+			{
+				if (func_da->arr[i].name == name)
+				{
+					func_index = i;
+					break;
+				}
+			}
+			assert(func_index != UINT64_MAX);
+			da_instr_append(&func->code,
+				(instr_t){.type = INSTR_PUSH_FUNC, .value = func_index});
 		}
 		else if ('0' <= src[i] && src[i] <= '9')
 		{
@@ -352,7 +387,7 @@ int main(int argc, char const* const* argv)
 	// Parsing
 	da_func_t func_da = {0};
 	da_buf_t buf_da = {0};
-	parse_func(&func_da, &buf_da, 0, src, true);
+	parse_func(&func_da, &buf_da, 0, src, true, '\0');
 
 	// Buffer
 	buf_t bin = {0};
