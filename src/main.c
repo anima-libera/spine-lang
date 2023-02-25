@@ -93,7 +93,7 @@ struct instr_t
 		INSTR_PUSH_SV, // special value
 		INSTR_PUSH_DATA_ADDR_AND_SIZE, // -- ptr size
 		INSTR_PRINT_CHAR,
-		INSTR_SYSCALL3, // arg3 arg2 arg1 number -- result
+		INSTR_SYSCALL6, // arg6 arg5 arg4 arg3 arg2 arg1 number -- result
 		INSTR_DUP, // a -- a a
 		INSTR_DISCARD, // a --
 		INSTR_SWAP, // a b -- b a
@@ -308,7 +308,7 @@ uint64_t parse_func(da_func_t* func_da, da_buf_t* buf_da,
 			(src[i]==(char_)){i++;da_instr_append(&func->code, \
 				(instr_t){.type=(instr_type_)});}
 		else if SIMPLE_INSTR('p', INSTR_PRINT_CHAR)
-		else if SIMPLE_INSTR('k', INSTR_SYSCALL3)
+		else if SIMPLE_INSTR('k', INSTR_SYSCALL6)
 		else if SIMPLE_INSTR('c', INSTR_CALL_POP)
 		else if SIMPLE_INSTR('h', INSTR_HALT_PROG)
 		else if SIMPLE_INSTR('r', INSTR_RETURN_FUNC)
@@ -557,10 +557,21 @@ int main(int argc, char const* const* argv)
 
 	#define PUSH_IMM32(imm32_) \
 		APPBYTES(0x68); APPLE32(imm32_)
-	#define POP64_TO_R64(reg64_) \
-		APPBYTES(0x58 + (reg64_))
 	#define PUSH_R64(reg64_) \
 		APPBYTES(0x50 + reg64_)
+	#define POP64_TO_R64(reg64_) \
+		APPBYTES(0x58 + (reg64_))
+
+	#define MOV_R64_TO_R64rN(reg64_, n_) \
+		APPBYTES(REX(1,0,0,1), 0x89, MODRM(MOD11, reg64_, ((n_)-8)))
+	#define MOV_R64_TO_R64r8(reg64_)  MOV_R64_TO_R64rN(reg64_, 8)
+	#define MOV_R64_TO_R64r9(reg64_)  MOV_R64_TO_R64rN(reg64_, 9)
+	#define MOV_R64_TO_R64r10(reg64_) MOV_R64_TO_R64rN(reg64_, 10)
+	#define MOV_R64_TO_R64r11(reg64_) MOV_R64_TO_R64rN(reg64_, 11)
+	#define MOV_R64_TO_R64r12(reg64_) MOV_R64_TO_R64rN(reg64_, 12)
+	#define MOV_R64_TO_R64r13(reg64_) MOV_R64_TO_R64rN(reg64_, 13)
+	#define MOV_R64_TO_R64r14(reg64_) MOV_R64_TO_R64rN(reg64_, 14)
+	#define MOV_R64_TO_R64r15(reg64_) MOV_R64_TO_R64rN(reg64_, 15)
 		
 	#define CALL_R64(reg64_) \
 		APPBYTES(0xff, MODRM(MOD11, 2, (reg64_)))
@@ -630,12 +641,20 @@ int main(int argc, char const* const* argv)
 					MOV_IMM32_TO_R64(0, RDI); // exit code value
 					SYSCALL();
 				break;
-				case INSTR_SYSCALL3:
+				case INSTR_SYSCALL6:
+					// argument order is %rdi, %rsi, %rdx, %r10, %r8, %r9
+					// see https://stackoverflow.com/a/2538212
 					POP64_TO_R64(RAX); // syscall number
 					POP64_TO_R64(RDI); // arg1
 					POP64_TO_R64(RSI); // arg2
 					POP64_TO_R64(RDX); // arg3
-					SYSCALL();
+					POP64_TO_R64(RBX); // arg4
+					MOV_R64_TO_R64r10(RBX);
+					POP64_TO_R64(RBX); // arg5
+					MOV_R64_TO_R64r8(RBX);
+					POP64_TO_R64(RBX); // arg6
+					MOV_R64_TO_R64r9(RBX);
+					SYSCALL(); // clobbers %rcx, %r11, and puts the result in %rax
 					PUSH_R64(RAX); // syscall result
 				break;
 				case INSTR_PUSH_FUNC:

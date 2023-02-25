@@ -38,7 +38,7 @@ syntax | behavior
 `?`, `?b` and `?q` | pop address a, read at it and push *a byte(`b`)/64-bits-int(`q`)
 `!`, `!b` and `!q` | pop value, pop address a, write the byte(`b`)/64-bits(`q`) value to a
 `_d` | push address of data segment
-`k` | pop arg3, arg2, arg1 and n, perform syscall number n, push syscall result
+`k` | pop 6 args, pop n, perform syscall number n with the 6 args, push syscall result
 
 For `?` and `!`, if neither `b` nor `q` is specified then the last one in the function is used (default to `q` if none are ever specified).
 
