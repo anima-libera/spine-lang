@@ -20,7 +20,7 @@ Currently accepted instructions are:
 syntax | behavior
 ------ | --------
 *base 10 unsigned integer* | push constant
-`'` *followed by a character* | push character ascoo value
+`'` *followed by a character* | push character ascii value
 `p` | pop ascii code from data stack and print
 `+`, `-`, `*`, `/`, `%` | pop b, pop a, push (a op b)
 `d`, `s` and `g` | duplicate, swap 2 and discard
@@ -32,6 +32,13 @@ syntax | behavior
 `h` | halt execution
 `n` | pop index and push copy of stack's index cell
 `o` | pop value, pop index and overwrite stack's index cell with value
+`"` *some characters* `"` | push address to string, push size of string
+`?`, `?b` and `?q` | pop address a, read at it and push *a byte(`b`)/64-bits-int(`q`)
+`!`, `!b` and `!q` | pop value, pop address a, write the byte(`b`)/64-bits(`q`) value to a
+`_d` | push address of data segment
+`k` | pop arg3, arg2, arg1 and n, perform syscall number n, push syscall result
+
+For `?` and `!`, if neither `b` nor `q` is specified then the last one in the function is used (default to `q` if none are ever specified).
 
 Some whitespace is ignored.
 

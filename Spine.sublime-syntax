@@ -15,10 +15,16 @@ contexts:
       scope: support.function.spine
     - match: 'd|g|r|h|s|n|o'
       scope: punctuation.spine
-    - match: 'c|\?|\!'
+    - match: 'c|k'
       scope: keyword.other.spine
+    - match: '(\?|\!)(b|q)?'
+      captures:
+        1: keyword.other.spine
+        2: storage.type.spine
     - match: '\+|\-|\*|\/|\%'
       scope: keyword.operator.arithmetic.spine
+    - match: '\_(d)'
+      scope: constant.language.spine
     - match: '[0-9]+'
       scope: constant.numeric.value.spine
     - match: '''.'

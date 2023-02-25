@@ -58,8 +58,8 @@ void buf_overwrite(buf_t* buf, uint64_t offset, uint8_t const* new_stuff, uint64
 
 struct addr_ofs_t
 {
-	uint64_t offset;
-	uint64_t size;
+	uint64_t ofs;   // offset in bin
+	uint64_t size;  // size in bits of the value in bin
 	uint64_t value; // base value for data addr, func index for func addr
 };
 typedef struct addr_ofs_t addr_ofs_t;
@@ -89,20 +89,22 @@ struct instr_t
 		INSTR_INIT_FUNC,
 		INSTR_RETURN_FUNC, // TODO test
 		INSTR_PUSH_IMM,
-		INSTR_PUSH_DATA_ADDR_AND_SIZE,
+		INSTR_PUSH_SV, // special value
+		INSTR_PUSH_DATA_ADDR_AND_SIZE, // -- ptr size
 		INSTR_PRINT_CHAR,
-		INSTR_DUP,
-		INSTR_DISCARD,
+		INSTR_SYSCALL3, // arg3 arg2 arg1 number -- result
+		INSTR_DUP, // a -- a a
+		INSTR_DISCARD, // a --
 		INSTR_SWAP, // a b -- b a
 		INSTR_PEEK, // ... i[n+1] h[n] g[n-1] ... b[1] a[0] n -- ... b a h(copied)
 		INSTR_OVW, // ... g[n] ... a[0] h n -- ... h(g is overwritten) ... a
-		INSTR_ADD,
-		INSTR_SUB,
-		INSTR_MUL,
-		INSTR_DIV,
-		INSTR_MOD,
-		INSTR_IF_THEN_ELSE,
-		INSTR_WHILE,
+		INSTR_ADD, // a b -- (a+b)
+		INSTR_SUB, // a b -- (a-b)
+		INSTR_MUL, // a b -- (a*b)
+		INSTR_DIV, // a b -- (a/b)
+		INSTR_MOD, // a b -- (a%b)
+		INSTR_IF_THEN_ELSE, // `<cond> <then> <else> i`
+		INSTR_WHILE, // `[<cond>] [...] w` is `while(cond){...}`
 		INSTR_READ, // ptr -- (*ptr)
 		INSTR_WRITE, // ... val ptr -- ... ((*ptr) is overwritten with val)
 	}
@@ -110,6 +112,12 @@ struct instr_t
 	uint64_t value;
 };
 typedef struct instr_t instr_t;
+
+enum special_value_t
+{
+	SV_DATA_START,
+};
+typedef enum special_value_t special_value_t; 
 
 struct da_instr_t
 {
@@ -159,12 +167,13 @@ void da_buf_append(da_buf_t* da, buf_t value)
 	da->len++;
 }
 
-uint64_t parse_func(da_func_t* da, da_buf_t* da_buf,
+uint64_t parse_func(da_func_t* func_da, da_buf_t* buf_da,
 	uint64_t self_index, char const* src, bool is_entry_point)
 {
-	assert(da->len == self_index);
-	da_func_append(da, (func_t){0});
-	func_t* func = &da->arr[self_index];
+	uint64_t rw_size = 64; // size for `?` and `!` instr
+	assert(func_da->len == self_index);
+	da_func_append(func_da, (func_t){0});
+	func_t* func = &func_da->arr[self_index];
 	if (is_entry_point)
 	{
 		da_instr_append(&func->code,
@@ -187,9 +196,9 @@ uint64_t parse_func(da_func_t* da, da_buf_t* da_buf,
 			// `[...]` pushes the address of a function that does `...`
 			// one can use `c` to call it
 			i++;
-			uint64_t sub_func_index = da->len;
-			i += parse_func(da, da_buf, sub_func_index, &src[i], false);
-			func = &da->arr[self_index]; // reallocation of the da might invalidate this ptr
+			uint64_t sub_func_index = func_da->len;
+			i += parse_func(func_da, buf_da, sub_func_index, &src[i], false);
+			func = &func_da->arr[self_index]; // realloc of the da might invalidate this ptr
 			assert(src[i] == ']');
 			i++;
 			da_instr_append(&func->code,
@@ -205,6 +214,23 @@ uint64_t parse_func(da_func_t* da, da_buf_t* da_buf,
 			}
 			da_instr_append(&func->code,
 				(instr_t){.type = INSTR_PUSH_IMM, .value = value});
+		}
+		else if (src[i] == '_')
+		{
+			i++;
+			special_value_t sv;
+			switch (src[i])
+			{
+				case 'd':
+					sv = SV_DATA_START;
+				break;
+				default:
+					assert(false);
+				break;
+			}
+			i++;
+			da_instr_append(&func->code,
+				(instr_t){.type = INSTR_PUSH_SV, .value = sv});
 		}
 		else if (src[i] == '\'')
 		{
@@ -225,15 +251,28 @@ uint64_t parse_func(da_func_t* da, da_buf_t* da_buf,
 				i++;
 			}
 			i++; // terminating double-quote
-			da_buf_append(da_buf, buf);
-			uint64_t buf_index = da_buf->len-1;
+			da_buf_append(buf_da, buf);
+			uint64_t buf_index = buf_da->len-1;
 			da_instr_append(&func->code,
 				(instr_t){.type = INSTR_PUSH_DATA_ADDR_AND_SIZE, .value = buf_index});
+		}
+		else if (src[i] == '?' || src[i] == '!')
+		{
+			enum instr_type_t instr_type = src[i] == '?' ? INSTR_READ : INSTR_WRITE;
+			i++;
+			if (src[i] == 'b' || src[i] == 'q')
+			{
+				rw_size = src[i] == 'b' ? 8 : 64;
+				i++;
+			}
+			da_instr_append(&func->code,
+				(instr_t){.type = instr_type, .value = rw_size});
 		}
 		#define SIMPLE_INSTR(char_, instr_type_) \
 			(src[i]==(char_)){i++;da_instr_append(&func->code, \
 				(instr_t){.type=(instr_type_)});}
 		else if SIMPLE_INSTR('p', INSTR_PRINT_CHAR)
+		else if SIMPLE_INSTR('k', INSTR_SYSCALL3)
 		else if SIMPLE_INSTR('c', INSTR_CALL)
 		else if SIMPLE_INSTR('h', INSTR_HALT_PROG)
 		else if SIMPLE_INSTR('r', INSTR_RETURN_FUNC)
@@ -247,10 +286,8 @@ uint64_t parse_func(da_func_t* da, da_buf_t* da_buf,
 		else if SIMPLE_INSTR('*', INSTR_MUL)
 		else if SIMPLE_INSTR('/', INSTR_DIV)
 		else if SIMPLE_INSTR('%', INSTR_MOD)
-		else if SIMPLE_INSTR('i', INSTR_IF_THEN_ELSE) // `<cond> <then> <else> i`
-		else if SIMPLE_INSTR('w', INSTR_WHILE) // `[<cond>] [...] w` is `while(cond){...}`
-		else if SIMPLE_INSTR('?', INSTR_READ)
-		else if SIMPLE_INSTR('!', INSTR_WRITE)
+		else if SIMPLE_INSTR('i', INSTR_IF_THEN_ELSE)
+		else if SIMPLE_INSTR('w', INSTR_WHILE)
 		#undef SIMPLE_INSTR
 		else
 		{
@@ -314,15 +351,15 @@ int main(int argc, char const* const* argv)
 
 	// Parsing
 	da_func_t func_da = {0};
-	da_buf_t da_buf = {0};
-	parse_func(&func_da, &da_buf, 0, src, true);
+	da_buf_t buf_da = {0};
+	parse_func(&func_da, &buf_da, 0, src, true);
 
 	// Buffer
 	buf_t bin = {0};
 	#define APPBYTES(...) \
 		buf_append(&bin, (uint8_t[]){__VA_ARGS__}, sizeof((uint8_t[]){__VA_ARGS__}))
-	#define OVWBYTES(offset_, ...) \
-		buf_overwrite(&bin, offset_, (uint8_t[]){__VA_ARGS__}, sizeof((uint8_t[]){__VA_ARGS__}))
+	#define OVWBYTES(ofs_, ...) \
+		buf_overwrite(&bin, ofs_, (uint8_t[]){__VA_ARGS__}, sizeof((uint8_t[]){__VA_ARGS__}))
 
 	// Data buffer
 	buf_t data = {0};
@@ -338,12 +375,12 @@ int main(int argc, char const* const* argv)
 	#define APPLE64(v_) \
 		APPBYTES(GET_BYTE(v_, 0), GET_BYTE(v_, 1), GET_BYTE(v_, 2), GET_BYTE(v_, 3), \
 			GET_BYTE(v_, 4), GET_BYTE(v_, 5), GET_BYTE(v_, 6), GET_BYTE(v_, 7))
-	#define OVWLE16(offset_, v_) \
-		OVWBYTES(offset_, GET_BYTE(v_, 0), GET_BYTE(v_, 1))
-	#define OVWLE32(offset_, v_) \
-		OVWBYTES(offset_, GET_BYTE(v_, 0), GET_BYTE(v_, 1), GET_BYTE(v_, 2), GET_BYTE(v_, 3))
-	#define OVWLE64(offset_, v_) \
-		OVWBYTES(offset_, GET_BYTE(v_, 0), GET_BYTE(v_, 1), GET_BYTE(v_, 2), GET_BYTE(v_, 3), \
+	#define OVWLE16(ofs_, v_) \
+		OVWBYTES(ofs_, GET_BYTE(v_, 0), GET_BYTE(v_, 1))
+	#define OVWLE32(ofs_, v_) \
+		OVWBYTES(ofs_, GET_BYTE(v_, 0), GET_BYTE(v_, 1), GET_BYTE(v_, 2), GET_BYTE(v_, 3))
+	#define OVWLE64(ofs_, v_) \
+		OVWBYTES(ofs_, GET_BYTE(v_, 0), GET_BYTE(v_, 1), GET_BYTE(v_, 2), GET_BYTE(v_, 3), \
 			GET_BYTE(v_, 4), GET_BYTE(v_, 5), GET_BYTE(v_, 6), GET_BYTE(v_, 7))
 
 	// See https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
@@ -360,13 +397,13 @@ int main(int argc, char const* const* argv)
 	APPLE16(2); // This is an executable
 	APPLE16(0x3e); // Target x86-64
 	APPLE32(1); // ELF format version (again??)
-	uint64_t entry_point_address_ofs = APPLE64(0); // Entry point address
-	uint64_t program_header_table_ofs_ofs = APPLE64(0x40); // Program header table offset in binary
+	uint64_t entry_point_addr_ofs = APPLE64(0); // Entry point address
+	uint64_t prog_header_table_ofs_ofs = APPLE64(0x40); // Program header table offset in binary
 	APPLE64(0); // Section header table offset in binary (we don't have one)
 	APPLE32(0); // Target architecture dependent flags
 	uint64_t elf_header_size_ofs = APPLE16(0); // Size of this header
 	APPLE16(0x38); // Size of a program header table entry (must be this value in 64bits?)
-	uint64_t program_header_table_length_ofs = APPLE16(0); // Number of entries in program header table
+	uint64_t prog_header_table_len_ofs = APPLE16(0); // Number of entries in program header table
 	APPLE16(0); // Size of a section header table entry (we don't have one)
 	APPLE16(0); // Number of entries in section header table
 	APPLE16(0); // Index of the section header table entry that has the section names
@@ -374,60 +411,60 @@ int main(int argc, char const* const* argv)
 	OVWLE16(elf_header_size_ofs, elf_header_size);
 
 	// Program header table
-	uint64_t program_header_table_ofs = bin.len;
-	OVWLE64(program_header_table_ofs_ofs, program_header_table_ofs);
-	uint64_t program_header_table_length = 0;
+	uint64_t prog_header_table_ofs = bin.len;
+	OVWLE64(prog_header_table_ofs_ofs, prog_header_table_ofs);
+	uint64_t prog_header_table_len = 0;
 
 	// Code segment or something
 	APPLE32(1); // Loadable segment
 	APPLE32((1<<0/*Readable*/) | (1<<1/*Writable*/) | (1<<2/*Executable*/)); // Flags
-	uint64_t code_segment_ofs_ofs = APPLE64(0); // Offset of segment in binary
-	uint64_t code_segment_address = 0x400000;
-	uint64_t code_segment_address_ofs_1 = APPLE64(0); // Address of segment in virtual memory
-	uint64_t code_segment_address_ofs_2 = APPLE64(0); // Address of segment in physical memory (wtf)
-	uint64_t code_segment_size_ofs_1 = APPLE64(0); // Segment size in binary
-	uint64_t code_segment_size_ofs_2 = APPLE64(0); // Segment size in memory
+	uint64_t code_seg_ofs_ofs = APPLE64(0); // Offset of segment in binary
+	uint64_t code_seg_addr = 0x400000;
+	uint64_t code_seg_addr_ofs_1 = APPLE64(0); // Address of segment in virtual memory
+	uint64_t code_seg_addr_ofs_2 = APPLE64(0); // Address of segment in physical memory (wtf)
+	uint64_t code_seg_size_ofs_1 = APPLE64(0); // Segment size in binary
+	uint64_t code_seg_size_ofs_2 = APPLE64(0); // Segment size in memory
 	APPLE64(0); // Alignment
-	program_header_table_length++;
-	#define COMPLETE_CODE_SEGMENT_INFO(offset_, size_) \
-		OVWLE64(code_segment_ofs_ofs, (offset_)); \
-		OVWLE64(code_segment_address_ofs_1, (offset_) + code_segment_address); \
-		OVWLE64(code_segment_address_ofs_2, (offset_) + code_segment_address); \
-		OVWLE64(code_segment_size_ofs_1, (size_)); \
-		OVWLE64(code_segment_size_ofs_2, (size_))
+	prog_header_table_len++;
+	#define COMPLETE_CODE_SEGMENT_INFO(ofs_, size_) \
+		OVWLE64(code_seg_ofs_ofs, (ofs_)); \
+		OVWLE64(code_seg_addr_ofs_1, (ofs_) + code_seg_addr); \
+		OVWLE64(code_seg_addr_ofs_2, (ofs_) + code_seg_addr); \
+		OVWLE64(code_seg_size_ofs_1, (size_)); \
+		OVWLE64(code_seg_size_ofs_2, (size_))
 
 	// Data segment
 	APPLE32(1); // Loadable segment
 	APPLE32((1<<0/*Readable*/) | (1<<1/*Writable*/)); // Flags
-	uint64_t data_segment_ofs_ofs = APPLE64(0); // Offset of segment in binary
-	uint64_t data_segment_address = 0x600000;
-	uint64_t data_segment_address_ofs_1 = APPLE64(0); // Address of segment in virtual memory
-	uint64_t data_segment_address_ofs_2 = APPLE64(0); // Address of segment in physical memory (wtf)
-	uint64_t data_segment_size_ofs_1 = APPLE64(0); // Segment size in binary
-	uint64_t data_segment_size_ofs_2 = APPLE64(0); // Segment size in memory
+	uint64_t data_seg_ofs_ofs = APPLE64(0); // Offset of segment in binary
+	uint64_t data_seg_addr = 0x600000;
+	uint64_t data_seg_addr_ofs_1 = APPLE64(0); // Address of segment in virtual memory
+	uint64_t data_seg_addr_ofs_2 = APPLE64(0); // Address of segment in physical memory (wtf)
+	uint64_t data_seg_size_ofs_1 = APPLE64(0); // Segment size in binary
+	uint64_t data_seg_size_ofs_2 = APPLE64(0); // Segment size in memory
 	APPLE64(0); // Alignment
-	program_header_table_length++;
-	#define COMPLETE_DATA_SEGMENT_INFO(offset_, size_) \
-		OVWLE64(data_segment_ofs_ofs, (offset_)); \
-		OVWLE64(data_segment_address_ofs_1, (offset_) + data_segment_address); \
-		OVWLE64(data_segment_address_ofs_2, (offset_) + data_segment_address); \
-		OVWLE64(data_segment_size_ofs_1, (size_)); \
-		OVWLE64(data_segment_size_ofs_2, (size_))
+	prog_header_table_len++;
+	#define COMPLETE_DATA_SEGMENT_INFO(ofs_, size_) \
+		OVWLE64(data_seg_ofs_ofs, (ofs_)); \
+		OVWLE64(data_seg_addr_ofs_1, (ofs_) + data_seg_addr); \
+		OVWLE64(data_seg_addr_ofs_2, (ofs_) + data_seg_addr); \
+		OVWLE64(data_seg_size_ofs_1, (size_)); \
+		OVWLE64(data_seg_size_ofs_2, (size_))
 
 	// Spine call stack
 	APPLE32(1); // Loadable segment
 	APPLE32((1<<0/*Readable*/) | (1<<1/*Writable*/)); // Flags
 	APPLE64(0); // Offset of segment in binary
-	uint64_t call_stack_segment_address = 0x800000;
-	APPLE64(call_stack_segment_address); // Address of segment in virtual memory
-	APPLE64(call_stack_segment_address); // Address of segment in physical memory (wtf)
+	uint64_t call_stack_seg_addr = 0x800000;
+	APPLE64(call_stack_seg_addr); // Address of segment in virtual memory
+	APPLE64(call_stack_seg_addr); // Address of segment in physical memory (wtf)
 	APPLE64(0); // Segment size in binary
-	uint64_t call_stack_segment_size = 0x8000;
-	APPLE64(call_stack_segment_size); // Segment size in memory
+	uint64_t call_stack_seg_size = 0x8000;
+	APPLE64(call_stack_seg_size); // Segment size in memory
 	APPLE64(0); // Alignment
-	program_header_table_length++;
+	prog_header_table_len++;
 	
-	OVWLE16(program_header_table_length_ofs, program_header_table_length);
+	OVWLE16(prog_header_table_len_ofs, prog_header_table_len);
 
 	#define BITS(b7_, b6_, b5_, b4_, b3_, b2_, b1_, b0_) \
 		(((b7_)<<7) | ((b6_)<<6) | ((b5_)<<5) | ((b4_)<<4) | \
@@ -452,15 +489,15 @@ int main(int argc, char const* const* argv)
 	#define SYSCALL() \
 		APPBYTES(0x0f, 0x05)
 
-	struct da_addr_ofs_t data_address_offsets = {0};
+	struct da_addr_ofs_t data_addr_ofss = {0};
 	#define APPDATAADDR32(v_) \
-		da_addr_ofs_append(&data_address_offsets, \
-			(addr_ofs_t){.offset = APPLE32(v_), .size = 32, .value = (v_)})
+		da_addr_ofs_append(&data_addr_ofss, \
+			(addr_ofs_t){.ofs = APPLE32(v_), .size = 32, .value = (v_)})
 
-	struct da_addr_ofs_t func_address_offsets = {0};
+	struct da_addr_ofs_t func_addr_ofss = {0};
 	#define APPFUNCADDR32(func_index_) \
-		da_addr_ofs_append(&func_address_offsets, \
-			(addr_ofs_t){.offset = APPLE32(func_index_), .size = 32, .value = (func_index_)})
+		da_addr_ofs_append(&func_addr_ofss, \
+			(addr_ofs_t){.ofs = APPLE32(func_index_), .size = 32, .value = (func_index_)})
 	
 	#define MOV_IMM32_TO_R64(imm32_, reg64_) \
 		APPBYTES(REX(1,0,0,0), 0xc7, MODRM(MOD11, 0, (reg64_))); APPLE32(imm32_)
@@ -476,6 +513,11 @@ int main(int argc, char const* const* argv)
 		APPBYTES(REX(1,0,0,0), 0x89, MODRM(MOD01, (reg64_src_), (reg64_pointingto_dst_)), 0)
 	#define MOV_MEMPOINTEDBY_R64_TO_R64(reg64_pointingto_src_, reg64_dst_) \
 		APPBYTES(REX(1,0,0,0), 0x8b, MODRM(MOD01, (reg64_dst_), (reg64_pointingto_src_)), 0)
+
+	#define MOV_R8_TO_MEMPOINTEDBY_R64(reg8_src_, reg64_pointingto_dst_) \
+		APPBYTES(0x88, MODRM(MOD01, (reg8_src_), (reg64_pointingto_dst_)), 0)
+	#define MOV_MEMPOINTEDBY_R64_TO_R8(reg64_pointingto_src_, reg8_dst_) \
+		APPBYTES(0x8a, MODRM(MOD01, (reg8_dst_), (reg64_pointingto_src_)), 0)
 
 	#define PUSH_IMM32(imm32_) \
 		APPBYTES(0x68); APPLE32(imm32_)
@@ -521,7 +563,7 @@ int main(int argc, char const* const* argv)
 		APPBYTES(REX(1,0,0,0), 0x69, MODRM(MOD11, reg64_dst_, reg64_src_a_)); APPLE32(imm32_src_b_)
 
 	// turns stuff like 3 into %rbp+3*8
-	// note that the spine call stack grows doenward, and that index 1 here is top
+	// note that the spine call stack grows downward, and that index 1 here is top
 	#define TURN_RBPCALLSTACK_R64_1INDEX_INTO_ADDR(reg64_) \
 		IMUL_R64_WITH_IMM32_TO_R64(reg64_, 8, reg64_); \
 		ADD_R64_TO_R64(RBP, reg64_)
@@ -530,24 +572,13 @@ int main(int argc, char const* const* argv)
 		APPBYTES(REX(1,0,0,0), 0xf7, MODRM(MOD11, 7, reg64_))
 
 	// Program code
-	uint64_t code_offset = bin.len;
-	OVWLE64(entry_point_address_ofs, code_segment_address + code_offset);
+	uint64_t code_ofs = bin.len;
+	OVWLE64(entry_point_addr_ofs, code_seg_addr + code_ofs);
 
-	#if 0
-	// Print a string stored in data segment via pointer
-	MOV_IMM32_TO_R64(1, RAX); // `write` syscall number
-	MOV_IMM32_TO_R64(1, RDI); // `stdout` file descriptor
-	uint64_t message_address = data_segment_address + DATABYTES('u', 'w', 'u', '\n');
-	MOV_DATAADDR32_TO_R64(message_address, RSI);
-	MOV_IMM32_TO_R64(4, RDX); // message length
-	SYSCALL();
-	#endif
-
-	uint64_t func_offset[func_da.len];
-
+	uint64_t func_ofs[func_da.len];
 	for (uint64_t func_i = 0; func_i < func_da.len; func_i++)
 	{
-		func_offset[func_i] = bin.len;
+		func_ofs[func_i] = bin.len;
 		for (uint64_t instr_i = 0; instr_i < func_da.arr[func_i].code.len; instr_i++)
 		{
 			instr_t instr = func_da.arr[func_i].code.arr[instr_i];
@@ -556,12 +587,20 @@ int main(int argc, char const* const* argv)
 				case INSTR_INIT_PROG:
 					// %rbp is used as the spine call stack pointer
 					// it grows downward
-					MOV_IMM32_TO_R64(call_stack_segment_address+call_stack_segment_size-8, RBP);
+					MOV_IMM32_TO_R64(call_stack_seg_addr+call_stack_seg_size-8, RBP);
 				break;
 				case INSTR_HALT_PROG:
 					MOV_IMM32_TO_R64(60, RAX); // `exit` syscall number
 					MOV_IMM32_TO_R64(0, RDI); // exit code value
 					SYSCALL();
+				break;
+				case INSTR_SYSCALL3:
+					POP64_TO_R64(RAX); // syscall number
+					POP64_TO_R64(RDI); // arg1
+					POP64_TO_R64(RSI); // arg2
+					POP64_TO_R64(RDX); // arg3
+					SYSCALL();
+					PUSH_R64(RAX); // syscall result
 				break;
 				case INSTR_PUSH_FUNC:
 					MOV_FUNCADDR32_TO_R64(instr.value, RAX);
@@ -587,16 +626,28 @@ int main(int argc, char const* const* argv)
 				case INSTR_PUSH_IMM:
 					PUSH_IMM32(instr.value);
 				break;
+				case INSTR_PUSH_SV:
+					switch (instr.value)
+					{
+						case SV_DATA_START:
+							MOV_DATAADDR32_TO_R64(data_seg_addr, RAX);
+							PUSH_R64(RAX);
+						break;
+						default:
+							assert(false);
+						break;
+					}
+				break;
 				case INSTR_PUSH_DATA_ADDR_AND_SIZE:
 					{
-						buf_t* buf = &da_buf.arr[instr.value];
-						uint64_t addr = data_segment_address +
+						buf_t* buf = &buf_da.arr[instr.value];
+						uint64_t addr = data_seg_addr +
 							buf_append(&data, buf->arr, buf->len);
 						MOV_DATAADDR32_TO_R64(addr, RAX);
 						MOV_IMM32_TO_R64(buf->len, RBX);
-						PUSH_R64(RAX);
-						PUSH_R64(RBX);
 					}
+					PUSH_R64(RAX);
+					PUSH_R64(RBX);
 				break;
 				case INSTR_PRINT_CHAR:
 					MOV_IMM32_TO_R64(1, RAX); // `write` syscall number
@@ -717,14 +768,40 @@ int main(int argc, char const* const* argv)
 					POP_RBPCALLSTACK_TO_R64(RAX); // discard
 				break;
 				case INSTR_READ:
-					POP64_TO_R64(RAX);
-					MOV_MEMPOINTEDBY_R64_TO_R64(RAX, RAX);
-					PUSH_R64(RAX);
+					if (instr.value == 64)
+					{
+						POP64_TO_R64(RAX);
+						MOV_MEMPOINTEDBY_R64_TO_R64(RAX, RAX);
+						PUSH_R64(RAX);
+					}
+					else if (instr.value == 8)
+					{
+						POP64_TO_R64(RAX);
+						MOV_MEMPOINTEDBY_R64_TO_R8(RAX, RAX);
+						PUSH_R64(RAX);
+					}
+					else
+					{
+						assert(false);
+					}
 				break;
 				case INSTR_WRITE:
-					POP64_TO_R64(RAX);
-					POP64_TO_R64(RBX);
-					MOV_R64_TO_MEMPOINTEDBY_R64(RBX, RAX);
+					if (instr.value == 64)
+					{
+						POP64_TO_R64(RAX);
+						POP64_TO_R64(RBX);
+						MOV_R64_TO_MEMPOINTEDBY_R64(RBX, RAX);
+					}
+					else if (instr.value == 8)
+					{
+						POP64_TO_R64(RAX);
+						POP64_TO_R64(RBX);
+						MOV_R8_TO_MEMPOINTEDBY_R64(RBX, RAX);
+					}
+					else
+					{
+						assert(false);
+					}
 				break;
 				default:
 					assert(false);
@@ -734,18 +811,18 @@ int main(int argc, char const* const* argv)
 	}
 
 	// Fill addresses of functions
-	for (uint64_t i = 0; i < func_address_offsets.len; i++)
+	for (uint64_t i = 0; i < func_addr_ofss.len; i++)
 	{
-		addr_ofs_t func_address_offset = func_address_offsets.arr[i];
-		if (func_address_offset.size == 32)
+		addr_ofs_t func_addr_ofs = func_addr_ofss.arr[i];
+		if (func_addr_ofs.size == 32)
 		{
-			OVWLE32(func_address_offset.offset,
-				code_segment_address + func_offset[func_address_offset.value]);
+			OVWLE32(func_addr_ofs.ofs,
+				code_seg_addr + func_ofs[func_addr_ofs.value]);
 		}
-		else if (func_address_offset.size == 64)
+		else if (func_addr_ofs.size == 64)
 		{
-			OVWLE64(func_address_offset.offset,
-				code_segment_address + func_offset[func_address_offset.value]);
+			OVWLE64(func_addr_ofs.ofs,
+				code_seg_addr + func_ofs[func_addr_ofs.value]);
 		}
 		else
 		{
@@ -754,42 +831,51 @@ int main(int argc, char const* const* argv)
 	}
 
 	// End of code
-	COMPLETE_CODE_SEGMENT_INFO(code_offset, bin.len - code_offset);
-
-	#if 0
-		printf("base address: 0x%lx\n", code_offset);
-		for (uint64_t i = code_offset; i < bin.len; i++)
-		{
-			printf("%02x ", bin.arr[i]);
-		}
-		printf("\n");
-	#endif
+	COMPLETE_CODE_SEGMENT_INFO(code_ofs, bin.len - code_ofs);
 
 	// Data
 	#if 0
 		buf_append_zeros(&bin, bin.len % (8 * 4096)); // Page align (is this necessary?)
 	#endif
-	uint64_t data_offset = bin.len;
-	COMPLETE_DATA_SEGMENT_INFO(data_offset, data.len);
+	uint64_t data_ofs = bin.len;
+	COMPLETE_DATA_SEGMENT_INFO(data_ofs, data.len);
 	buf_append(&bin, data.arr, data.len);
 
-	// Correct addresses that are supposed to point to stuff in the data segment
-	for (uint64_t i = 0; i < data_address_offsets.len; i++)
-	{
-		addr_ofs_t data_address_offset = data_address_offsets.arr[i];
-		if (data_address_offset.size == 32)
+	#if 0
+		printf("data at 0x%lx:\n", data_seg_addr + data_ofs);
+		for (int i = 0; i < data.len; i++)
 		{
-			OVWLE32(data_address_offset.offset, data_address_offset.value + data_offset);
+			printf("%c", data.arr[i]);
 		}
-		else if (data_address_offset.size == 64)
+		printf("\n");
+	#endif
+
+	// Correct addresses that are supposed to point to stuff in the data segment
+	for (uint64_t i = 0; i < data_addr_ofss.len; i++)
+	{
+		addr_ofs_t data_addr_ofs = data_addr_ofss.arr[i];
+		if (data_addr_ofs.size == 32)
 		{
-			OVWLE64(data_address_offset.offset, data_address_offset.value + data_offset);
+			OVWLE32(data_addr_ofs.ofs, data_addr_ofs.value + data_ofs);
+		}
+		else if (data_addr_ofs.size == 64)
+		{
+			OVWLE64(data_addr_ofs.ofs, data_addr_ofs.value + data_ofs);
 		}
 		else
 		{
 			assert(false);
 		}
 	}
+
+	#if 0
+		printf("base address: 0x%lx\n", code_ofs);
+		for (uint64_t i = code_ofs; i < data_ofs; i++)
+		{
+			printf("%02x ", bin.arr[i]);
+		}
+		printf("\n");
+	#endif
 
 	// Write to file
 	FILE* file = fopen("bin/jaaj", "wb");
