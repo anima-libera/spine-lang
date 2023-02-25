@@ -85,7 +85,8 @@ struct instr_t
 		INSTR_INIT_PROG,
 		INSTR_HALT_PROG, // TODO test
 		INSTR_PUSH_FUNC,
-		INSTR_CALL,
+		INSTR_CALL_POP,
+		INSTR_CALL_FUNC,
 		INSTR_INIT_FUNC,
 		INSTR_RETURN_FUNC, // TODO test
 		INSTR_PUSH_IMM,
@@ -237,7 +238,7 @@ uint64_t parse_func(da_func_t* func_da, da_buf_t* buf_da,
 			}
 			assert(func_index != UINT64_MAX);
 			da_instr_append(&func->code,
-				(instr_t){.type = INSTR_PUSH_FUNC, .value = func_index});
+				(instr_t){.type = INSTR_CALL_FUNC, .value = func_index});
 		}
 		else if ('0' <= src[i] && src[i] <= '9')
 		{
@@ -308,7 +309,7 @@ uint64_t parse_func(da_func_t* func_da, da_buf_t* buf_da,
 				(instr_t){.type=(instr_type_)});}
 		else if SIMPLE_INSTR('p', INSTR_PRINT_CHAR)
 		else if SIMPLE_INSTR('k', INSTR_SYSCALL3)
-		else if SIMPLE_INSTR('c', INSTR_CALL)
+		else if SIMPLE_INSTR('c', INSTR_CALL_POP)
 		else if SIMPLE_INSTR('h', INSTR_HALT_PROG)
 		else if SIMPLE_INSTR('r', INSTR_RETURN_FUNC)
 		else if SIMPLE_INSTR('d', INSTR_DUP)
@@ -641,8 +642,12 @@ int main(int argc, char const* const* argv)
 					MOV_FUNCADDR32_TO_R64(instr.value, RAX);
 					PUSH_R64(RAX);
 				break;
-				case INSTR_CALL:
+				case INSTR_CALL_POP:
 					POP64_TO_R64(RAX);
+					CALL_R64(RAX);
+				break;
+				case INSTR_CALL_FUNC:
+					MOV_FUNCADDR32_TO_R64(instr.value, RAX);
 					CALL_R64(RAX);
 				break;
 				case INSTR_INIT_FUNC:
@@ -811,9 +816,10 @@ int main(int argc, char const* const* argv)
 					}
 					else if (instr.value == 8)
 					{
+						MOV_IMM32_TO_R64(0, RBX); // necessary (mov r8 does not clear)
 						POP64_TO_R64(RAX);
-						MOV_MEMPOINTEDBY_R64_TO_R8(RAX, RAX);
-						PUSH_R64(RAX);
+						MOV_MEMPOINTEDBY_R64_TO_R8(RAX, RBX);
+						PUSH_R64(RBX);
 					}
 					else
 					{

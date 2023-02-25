@@ -25,8 +25,8 @@ syntax | behavior
 `+`, `-`, `*`, `/`, `%` | pop b, pop a, push (a op b)
 `d`, `s` and `g` | duplicate, swap 2 and discard
 `[...]` where `...` is some code | push address of anonymous function that does `...`
-`@F[...]` | declare a function named `F` that does `...`
-`F` | push address of the function named `F` (use `c` to call it)
+`@F[...]` | define (at compile-time) a function named `F` that does `...`
+`F` | call the function named `F`
 `c` | pop function address and call it
 `w` | pop function address b, pop function address c, while(call c, pop != 0){call b}
 `i` | pop b, pop a, pop c, if c != 0 then push a else push b
