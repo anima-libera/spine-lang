@@ -9,11 +9,11 @@ More comming soon, come back in a few units of time!
 
 A C compiler can compile the Spine compiler, and the Spine compiler can compile some very basic stuff into Linux x86-64 ELF binaries.
 
-The Spine compiler takes source code in its first command line argument. To compile everything in one go from compiling the Spine compiler to running the compiled version of the source code given to the Spine compiler, `run.sh <args...>` makes things easier.
+The Spine compiler can be invoked with arguments `-c` and in-command-line source code, or `-f` and path to source file (multiple pieces of source code can be passed to the compiler, it will read the concatenation of them).
 
-Invoke the Spine compiler with arguments `-c` and in-command-line source code, or `-f` and path to source file.
+The `run.sh` script compiles the Spine compiler, calls the Spine compiler to compile the Spine program, then runs the Spine program. For example, `sh run.sh -c "31 [d127-][dp 1+]w 10p"` should work.
 
-For example, `sh run.sh -c "31 [d127-][dp 1+]w 10p"` should work.
+The `run.sh` also adds the Spine standard library to the beginning of the source code (see `src/)
 
 Currently accepted instructions are:
 
@@ -24,10 +24,10 @@ syntax | behavior
 `p` | pop ascii code from data stack and print
 `+`, `-`, `*`, `/`, `%` | pop b, pop a, push (a op b)
 `d`, `s` and `g` | duplicate, swap 2 and discard
-`[...]` where `...` is some code | push address of anonymous function that does `...`
-`@F[...]` | define (at compile-time) a function named `F` that does `...`
-`F` | call the function named `F`
+`[...]` | push address of anonymous function that does `...`
 `c` | pop function address and call it
+`@F[...]` | at compile-time, define (or redefine) a function named `F` that does `...` (the allowed names are all the 26 uppercase letters)
+`F` | call the function named `F`
 `w` | pop function address b, pop function address c, while(call c, pop != 0){call b}
 `i` | pop b, pop a, pop c, if c != 0 then push a else push b
 `r` | return from the current function
@@ -42,7 +42,7 @@ syntax | behavior
 
 For `?` and `!`, if neither `b` nor `q` is specified then the last one in the function is used (default to `q` if none are ever specified).
 
-Some whitespace is ignored.
+Some whitespace is ignored. Line comments are started with `#!` and end at a new-line character (note how it will allow for she-bang stuff).
 
 *Example:* `31 [d127-][dp 1+]w 10p` prints all the ascii characters from space (code 31) to `~` (code 126).
 

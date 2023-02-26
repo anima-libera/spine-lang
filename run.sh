@@ -16,7 +16,7 @@ then
 	echo "Error: Expected a Spine program as first argument."
 	echo "Try \"104p10p\" for example (it should print h or something)."
 fi
-./bin/spine "$1" "$2"
+./bin/spine -f src/stdlib.spn "$@"
 
 # Run the binary produced by the Spine compiler
 chmod +x bin/jaaj

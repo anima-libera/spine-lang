@@ -1,4 +1,9 @@
 
+// NOTE: The code here is very bad *on purpose* because at some point I plan to
+// bootstrap Spine which will involve porting this to Spine, and Spine being
+// what it is it will be easier if the code is bad and does not use a lot of
+// abstractions and stuff. Sowwy~~ >.<'
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -194,6 +199,40 @@ uint64_t parse_func(da_func_t* func_da, da_buf_t* buf_da,
 		{
 			i++;
 		}
+		else if (src[i] == '#' && src[i+1] == '!')
+		{
+			// line comment
+			while (src[i] != '\n' && src[i] != '\0')
+			{
+				i++;
+			}
+		}
+		else if (src[i] == '#' && src[i+1] == '[')
+		{
+			// block comment
+			i += 2;
+			uint64_t bracket_depth = 1;
+			bool in_string = false;
+			while (src[i] != '\0' || bracket_depth > 0)
+			{
+				if ((!in_string) && (src[i] == '[' || src[i] == ']'))
+				{
+					// handle nested brackets
+					bracket_depth += src[i] == '[' ? 1 : -1;
+				}
+				else if (src[i] == '\"')
+				{
+					// ignore string literals (and any contained brackets)
+					in_string = !in_string;
+				}
+				else if (src[i] == '\'' && src[i+1] != '\0')
+				{
+					// ignore char literals (and any contained brackets)
+					i++;
+				}
+				i++;
+			}
+		}
 		else if (src[i] == '[')
 		{
 			// `[...]` pushes the address of a function that does `...`
@@ -294,6 +333,7 @@ uint64_t parse_func(da_func_t* func_da, da_buf_t* buf_da,
 		}
 		else if (src[i] == '?' || src[i] == '!')
 		{
+			// `?` and `!` instructions can have a `b` or `q` suffix
 			enum instr_type_t instr_type = src[i] == '?' ? INSTR_READ : INSTR_WRITE;
 			i++;
 			if (src[i] == 'b' || src[i] == 'q')
@@ -343,7 +383,7 @@ uint64_t parse_func(da_func_t* func_da, da_buf_t* buf_da,
 	return i;
 }
 
-char* read_file(char const* filepath)
+char* read_file(char const* filepath, uint64_t* out_len)
 {
 	FILE* file = fopen(filepath, "r");
 	if (file == NULL)
@@ -352,38 +392,53 @@ char* read_file(char const* filepath)
 		return NULL;
 	}
 	fseek(file, 0, SEEK_END);
-	long const length = ftell(file);
+	long const len = ftell(file);
 	fseek(file, 0, SEEK_SET);
-	char* buffer = malloc((length+1) * sizeof(char));
-	size_t const length_read = fread(buffer, sizeof(char), length, file);
+	char* buffer = malloc((len+1) * sizeof(char));
+	size_t const len_read = fread(buffer, sizeof(char), len, file);
 	fclose(file);
-	if (length_read != (unsigned int)length)
+	if (len_read != (unsigned int)len)
 	{
 		fprintf(stderr, "File error: failed to properly read \"%s\"\n",
 			filepath);
 		free(buffer);
 		return NULL;
 	}
-	buffer[length] = '\0';
+	buffer[len] = '\0';
+	if (out_len != NULL)
+	{
+		*out_len = len;
+	}
 	return buffer;
 }
 
 int main(int argc, char const* const* argv)
 {
-	assert(argc == 3);
-	char const* src;
-	if (strcmp(argv[1], "-c") == 0)
+	buf_t src_buf = {0};
+	uint64_t argv_i = 1;
+	while (argv_i < argc)
 	{
-		src = argv[2];
+		if (strcmp(argv[argv_i], "-c") == 0)
+		{
+			argv_i++;
+			buf_append(&src_buf, argv[argv_i], strlen(argv[argv_i]));
+			argv_i++;
+		}
+		else if (strcmp(argv[argv_i], "-f") == 0)
+		{
+			argv_i++;
+			uint64_t len;
+			char const* content = read_file(argv[argv_i], &len);
+			buf_append(&src_buf, content, len);
+			argv_i++;
+		}
+		else
+		{
+			assert(false);
+		}
 	}
-	else if (strcmp(argv[1], "-f") == 0)
-	{
-		src = read_file(argv[2]);
-	}
-	else
-	{
-		assert(false);
-	}
+	buf_append_byte(&src_buf, '\0');
+	char const* src = src_buf.arr;
 
 	// Parsing
 	da_func_t func_da = {0};

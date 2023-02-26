@@ -7,6 +7,11 @@ scope: source.spine
 contexts:
 
   main:
+    - match: '\#\!.*$'
+      scope: comment.line.spine
+    - match: '\#\['
+      scope: punctuation.section.brackets.begin.spine
+      push: comment_brackets
     - match: 'w'
       scope: keyword.control.loop.while.spine
     - match: 'i'
@@ -52,3 +57,14 @@ contexts:
       scope: punctuation.section.brackets.end.spine
       pop: true
     - include: main
+
+  comment_brackets:
+    - meta_scope: comment.block.spine
+    - match: '\]'
+      scope: punctuation.section.brackets.end.spine
+      pop: true
+    - match: '\['
+      scope: punctuation.section.brackets.begin.spine
+      push: comment_brackets
+    - match: '\"[^\"]*\"'
+    - match: '''.'

@@ -1,0 +1,10 @@
+#! (n --) print number in base 10
+@N[d[0 0[2n][10*2n10%+2n10/2o1n1+1o]ws[d][1n10%'0+p1n10/1o1-]wggg][g'0p]ic]
+#! (ptr len --) print ascii string
+@S[0 0 0 3n5n1 1kggg]
+#! (ptr --) print null-terminated (C-style) ascii string
+@Z[[d?b][d?bp1+]wg]
+#! (--) print new-line character
+@L[10p]
+#! (size -- ptr) allocate memory with mmap
+@M[0 0 1-34 3 4n0 9k]
