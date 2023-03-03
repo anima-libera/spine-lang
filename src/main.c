@@ -113,6 +113,8 @@ struct instr_t
 		INSTR_WHILE, // `[<cond>] [...] w` is `while(cond){...}`
 		INSTR_READ, // ptr -- (*ptr)
 		INSTR_WRITE, // ... val ptr -- ... ((*ptr) is overwritten with val)
+		INSTR_VAR_SET, // ... value -- ... (the specified variable is set to value)
+		INSTR_VAR_GET, // ... -- ... value(from the specified variable)
 	}
 	type;
 	uint64_t value;
@@ -142,6 +144,7 @@ void da_instr_append(da_instr_t* da, instr_t instr)
 struct func_t
 {
 	da_instr_t code;
+	bool local_vars;
 	char name;
 };
 typedef struct func_t func_t;
@@ -193,6 +196,11 @@ uint64_t parse_func(da_func_t* func_da, da_buf_t* buf_da,
 	}
 	func->name = name;
 	uint64_t i = 0;
+	if (src[i] == '.')
+	{
+		i++;
+		func->local_vars = true;
+	}
 	while ((src[i] != '\0' && is_entry_point) || (src[i] != ']' && !is_entry_point))
 	{
 		if (src[i] == ' ' || src[i] == '\t' || src[i] == '\n')
@@ -261,7 +269,7 @@ uint64_t parse_func(da_func_t* func_da, da_buf_t* buf_da,
 			assert(src[i] == ']');
 			i++;
 		}
-		else if ('A' <= src[i] && src[i] <= 'Z')
+		else if ('A' <= src[i] && src[i] <= 'Z' && src[i] != 'H' && src[i] != 'V')
 		{
 			// push named function address
 			char name = src[i];
@@ -344,13 +352,22 @@ uint64_t parse_func(da_func_t* func_da, da_buf_t* buf_da,
 			da_instr_append(&func->code,
 				(instr_t){.type = instr_type, .value = rw_size});
 		}
+		else if (src[i] == 'h' || src[i] == 'v' || src[i] == 'H' || src[i] == 'V')
+		{
+			uint64_t which_var = (src[i] == 'h' || src[i] == 'H') ? 0 : 1;
+			enum instr_type_t instr_type =
+				(src[i] == 'h' || src[i] == 'v') ? INSTR_VAR_GET : INSTR_VAR_SET;
+			i++;
+			da_instr_append(&func->code,
+				(instr_t){.type = instr_type, .value = which_var});
+		}
 		#define SIMPLE_INSTR(char_, instr_type_) \
 			(src[i]==(char_)){i++;da_instr_append(&func->code, \
 				(instr_t){.type=(instr_type_)});}
 		else if SIMPLE_INSTR('p', INSTR_PRINT_CHAR)
 		else if SIMPLE_INSTR('k', INSTR_SYSCALL6)
 		else if SIMPLE_INSTR('c', INSTR_CALL_POP)
-		else if SIMPLE_INSTR('h', INSTR_HALT_PROG)
+		else if SIMPLE_INSTR('t', INSTR_HALT_PROG)
 		else if SIMPLE_INSTR('r', INSTR_RETURN_FUNC)
 		else if SIMPLE_INSTR('d', INSTR_DUP)
 		else if SIMPLE_INSTR('g', INSTR_DISCARD)
@@ -627,6 +644,17 @@ int main(int argc, char const* const* argv)
 	#define MOV_R64_TO_R64r13(reg64_) MOV_R64_TO_R64rN(reg64_, 13)
 	#define MOV_R64_TO_R64r14(reg64_) MOV_R64_TO_R64rN(reg64_, 14)
 	#define MOV_R64_TO_R64r15(reg64_) MOV_R64_TO_R64rN(reg64_, 15)
+
+	#define MOV_R64rN_TO_R64(n_, reg64_) \
+		APPBYTES(REX(1,1,0,0), 0x89, MODRM(MOD11, ((n_)-8), reg64_))
+	#define MOV_R64r8_TO_R64(reg64_)  MOV_R64rN_TO_R64(8,  reg64_)
+	#define MOV_R64r9_TO_R64(reg64_)  MOV_R64rN_TO_R64(9,  reg64_)
+	#define MOV_R64r10_TO_R64(reg64_) MOV_R64rN_TO_R64(10, reg64_)
+	#define MOV_R64r11_TO_R64(reg64_) MOV_R64rN_TO_R64(11, reg64_)
+	#define MOV_R64r12_TO_R64(reg64_) MOV_R64rN_TO_R64(12, reg64_)
+	#define MOV_R64r13_TO_R64(reg64_) MOV_R64rN_TO_R64(13, reg64_)
+	#define MOV_R64r14_TO_R64(reg64_) MOV_R64rN_TO_R64(14, reg64_)
+	#define MOV_R64r15_TO_R64(reg64_) MOV_R64rN_TO_R64(15, reg64_)
 		
 	#define CALL_R64(reg64_) \
 		APPBYTES(0xff, MODRM(MOD11, 2, (reg64_)))
@@ -690,6 +718,9 @@ int main(int argc, char const* const* argv)
 					// %rbp is used as the spine call stack pointer
 					// it grows downward
 					MOV_IMM32_TO_R64(call_stack_seg_addr+call_stack_seg_size-8, RBP);
+					MOV_IMM32_TO_R64(0, RAX);
+					MOV_R64_TO_R64r14(RAX); // set h to 0
+					MOV_R64_TO_R64r15(RAX); // set v to 0
 				break;
 				case INSTR_HALT_PROG:
 					MOV_IMM32_TO_R64(60, RAX); // `exit` syscall number
@@ -729,13 +760,60 @@ int main(int argc, char const* const* argv)
 					// so we move it to the spine call stack
 					POP64_TO_R64(RAX);
 					PUSH_R64_TO_RBPCALLSTACK(RAX);
+					if (func_da.arr[func_i].local_vars)
+					{
+						MOV_R64r14_TO_R64(RAX);
+						PUSH_R64_TO_RBPCALLSTACK(RAX); // save previous value of var h
+						MOV_R64r15_TO_R64(RAX);
+						PUSH_R64_TO_RBPCALLSTACK(RAX); // save previous value of var v
+						MOV_IMM32_TO_R64(0, RAX);
+						MOV_R64_TO_R64r14(RAX); // set h to 0
+						MOV_R64_TO_R64r15(RAX); // set v to 0
+					}
 				break;
 				case INSTR_RETURN_FUNC:
+					if (func_da.arr[func_i].local_vars)
+					{
+						POP_RBPCALLSTACK_TO_R64(RAX);
+						MOV_R64_TO_R64r15(RAX); // restore previous value of var v
+						POP_RBPCALLSTACK_TO_R64(RAX);
+						MOV_R64_TO_R64r14(RAX); // restore previous value of var h
+					}
 					// The return address was put on the spine call stack
 					// so we move it back to the data stack for `ret` to work
 					POP_RBPCALLSTACK_TO_R64(RAX);
 					PUSH_R64(RAX);
 					RET();
+				break;
+				case INSTR_VAR_SET:
+					POP64_TO_R64(RAX);
+					if (instr.value == 0)
+					{
+						MOV_R64_TO_R64r14(RAX); // set var h
+					}
+					else if (instr.value == 1)
+					{
+						MOV_R64_TO_R64r15(RAX); // set var v
+					}
+					else
+					{
+						assert(false);
+					}
+				break;
+				case INSTR_VAR_GET:
+					if (instr.value == 0)
+					{
+						MOV_R64r14_TO_R64(RAX); // get var h
+					}
+					else if (instr.value == 1)
+					{
+						MOV_R64r15_TO_R64(RAX); // get var v
+					}
+					else
+					{
+						assert(false);
+					}
+					PUSH_R64(RAX);
 				break;
 				case INSTR_PUSH_IMM:
 					PUSH_IMM32(instr.value);

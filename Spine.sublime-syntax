@@ -12,6 +12,8 @@ contexts:
     - match: '\#\['
       scope: punctuation.section.brackets.begin.spine
       push: comment_brackets
+    - match: '[hvHV]'
+      scope: variable.parameter.spine
     - match: 'w'
       scope: keyword.control.loop.while.spine
     - match: 'i'
@@ -44,8 +46,10 @@ contexts:
       push: brackets
     - match: '[A-Z]'
       scope: variable.function.spine
-    - match: '\['
-      scope: punctuation.section.brackets.begin.spine
+    - match: '(\[)(\.)?'
+      captures:
+        1: punctuation.section.brackets.begin.spine
+        2: variable.parameter.spine
       push: brackets
     - match: '\]'
       scope: invalid.illegal.spine
