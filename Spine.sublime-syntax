@@ -38,11 +38,12 @@ contexts:
       scope: string.quoted.single.spine
     - match: '\"[^\"]*\"'
       scope: string.quoted.double.spine
-    - match: '(\@)([A-Z])(\[)'
+    - match: '(\@)([A-Z])(\[)(\.)?'
       captures:
         1: variable.function.spine
         2: variable.function.spine entity.name.function.spine
         3: punctuation.section.brackets.begin.spine
+        4: variable.parameter.spine
       push: brackets
     - match: '[A-Z]'
       scope: variable.function.spine
