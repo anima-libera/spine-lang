@@ -1,5 +1,5 @@
 #! (n --) print number in base 10
-@N[d[0 0[2n][10*2n10%+2n10/2o1n1+1o]ws[d][1n10%'0+p1n10/1o1-]wggg][g'0p]ic]
+@N[.d[[d][d10%h10*+H10/v1+V]wg[v][h10%48+ph10/Hv1-V]w][48+p]ic]
 #! (ptr len --) print ascii string
 @S[0 0 0 3n5n1 1kggg]
 #! (ptr --) print null-terminated (C-style) ascii string
